@@ -1,1 +1,1 @@
-from read_ani import read
+from .input_reader import InputReader

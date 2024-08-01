@@ -3,7 +3,7 @@ import torch
 import torchani
 
 class Calculator():		 
-    def __init__(self, model: int = 1, gpuid: int = None):
+    def __init__(self, model: int = 1, gpuid: int = None, output: str = None)-> torchani.ase.Calculator:
         """
         Args:
             model: int, default=1
@@ -11,13 +11,15 @@ class Calculator():
                 1: ANI-2x
                 2: ANI-1x
                 3: ANI-1ccx
+                4: ANI-1xnr
             gpuid: int, default=None
                 The GPU ID to be used for calculation. If None, use CPU. Default is None.
+            output: str, output file path. Default is None.
         """
-        super().__init__()
+        self.output = output
+        model_dict = {1: 'ANI-2x', 2: 'ANI-1x', 3: 'ANI-1ccx', 4: 'ANI-1xnr'}
 
-        model_dict = {1: 'ANI-2x', 2: 'ANI-1x', 3: 'ANI-1ccx'}
-
+        info_message = [f"\nLoading the Machine Learning Potential Model...\n"]
         scripts_path = os.path.dirname(os.path.realpath(__file__))
         if model == 1:
             model_path = os.path.join(scripts_path, 'model/ani-2x_8x')
@@ -25,13 +27,35 @@ class Calculator():
             model_path = os.path.join(scripts_path, 'model/ani-1x_8x')
         elif model == 3:
             model_path = os.path.join(scripts_path, 'model/ani-1ccx_8x')
+        elif model == 4:
+            model_path = os.path.join(scripts_path, 'model/ani-1xnr_8x')
+        
+        try:
+            if not os.path.exists(model_path):
+                raise ValueError(f'Model path does not exist.')
+        except ValueError as e:
+            self.log_info(info_message)
+            self.log_error(str(e))
+            raise
 
-        self.construct_calculator(model_path, gpuid=gpuid)
+        info_message.append(f'Loading ANI model ({model_dict.get(model)}) successfully.\n')
 
-        print('Loading ANI model',f'({model_dict.get(model)})','successfully.')
+        self.model_path = model_path
+        self.gpuid = gpuid
 
-    def construct_calculator(self, model_path: str, gpuid: int = None):
+        self.log_info(info_message)
 
+    
+    def construct_calculator(self) -> torchani.ase.Calculator:
+        """
+            Construct the calculator.
+        """
+
+        model_path = self.model_path
+        gpuid = self.gpuid
+
+        print(gpuid)
+        info_message = []
         # find the model files
         torch.set_num_threads(2)
         params_file = [file for file in os.listdir(model_path) if file.endswith('.params')]
@@ -54,14 +78,41 @@ class Calculator():
             if torch.cuda.is_available():
                 try:
                     device = torch.device(f'cuda:{gpuid}')
+                    info_message.append(f'Using GPU {gpuid} for calculation.')
                 except:
+                    info_message.append(f'ERROR: GPU {gpuid} is not available.')
+                    self.log_info(info_message)
                     raise ValueError(f'GPU {gpuid} is not available.')
             else:
+                info_message.append('ERROR: CUDA is not available.')
+                self.log_info(info_message)
                 raise ValueError('CUDA is not available.')
         else:
             device = torch.device('cpu')
-        
-        nnp1 = nnp1.to(device)
+            info_message.append('Using CPU for calculation.')
 
+        nnp1 = nnp1.to(device)
+        self.log_info(info_message)
         # set the calculator
-        self.cal = torchani.ase.Calculator(consts.species, nnp1)
+        return torchani.ase.Calculator(consts.species, nnp1)
+    
+    def log_error(self, error_message: str) -> None:
+        """
+        Logs error messages to the output file.
+
+        Args:
+            error_message: The error message to log.
+        """
+        with open(self.output, 'a') as file:
+            file.write(f"ERROR: {error_message}\n")
+
+    def log_info(self, info_message: list) -> None:
+        """
+        Logs info messages to the output file.
+
+        Args:
+            info_message: The info message to log.
+        """
+        with open(self.output, 'a') as file:
+            for info in info_message:   
+                file.write(f"{info}")
