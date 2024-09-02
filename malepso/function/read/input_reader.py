@@ -265,7 +265,3 @@ class InputReader():
         self.log_info(info_message)
 
         return atoms
-
-if __name__ == '__main__':
-    reader = InputReader()
-    reader(r'/data1/wayne/software/MaLePSO/malepso/function/read/job.inp')

@@ -44,7 +44,6 @@ class Calculator():
         self.gpuid = gpuid
 
         self.log_info(info_message)
-
     
     def construct_calculator(self) -> torchani.ase.Calculator:
         """
