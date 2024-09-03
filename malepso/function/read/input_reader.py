@@ -288,6 +288,9 @@ class InputReader():
         constraints = []
         info_message = ['\nPerforming the constraints and restraints ...\n']
         try:
+            from ase.constraints import FixAtoms
+            from ase.constraints import FixInternals
+
             for line in post_processing:
                 if line.strip().split()[0] not in post_processing_keywords:
                     raise ValueError(f'Invalid post-processing command: {line.strip()}')
@@ -296,41 +299,58 @@ class InputReader():
                     if len(line.strip().split()) != 2:
                         raise ValueError(f'There should be only one atomic index for the command: {line.strip()}')
                     
+                    index = int(line.strip().split()[1])
+
+                    constraints.append(FixAtoms(indices=[index-1]))
 
                 elif line.strip().split()[0] == 'B':
                     if len(line.strip().split()) != 3:
                         raise ValueError(f'There should be only two atomic indices for the command: {line.strip()}')
 
-                    from ase.constraints import FixBondLengths
-                    from .restrain import Position_restraints
                     index1 = int(line.strip().split()[1])
                     index2 = int(line.strip().split()[2])
 
-                    distance = atoms.get_distance(index1, index2)
+                    # Atomic indices in ASE start from 0
+                    distance = atoms.get_distance(index1-1, index2-1)    
+                    constraints.append(FixInternals(bonds=[[distance,[index1-1, index2-1]]]))
                     info_message.append(f'Fixing bond between atoms {index1} and {index2} with distance of {distance}.\n')
-                    #fixbond = FixBondLengths([(index1, index2)])
-                    #self.maxiter=50000
-                    #fixbond.tolerance=1e-10
-                    #constraints.append(fixbond)
-                    from ase.constraints import FixInternals
-
-                    constraints.append(FixInternals(bonds=[[distance,[index1, index2]]]))
-
-                    #print(FixInternals(bonds=[(index1, index2)]).bonds)
-
+                
                 elif line.strip().split()[0] == 'A':
                     if len(line.strip().split()) != 4:
                         raise ValueError(f'There should be only three atomic indices for the command: {line.strip()}')
 
+                    index1 = int(line.strip().split()[1])
+                    index2 = int(line.strip().split()[2])
+                    index3 = int(line.strip().split()[3])
+
+                    angle_indices = [index1-1, index2-1, index3-1]
+                    angle1 = [atoms.get_angle(index1-1,index2-1,index3-1), angle_indices]
+                    FixInternals(angles=[angle1])
+
+                    info_message.append(f'Fixing angle between atoms {index1}, {index2}, and {index3} with angle of {angle}.\n')
+
                 elif line.strip().split()[0] == 'D':
                     if len(line.strip().split()) != 5:
                         raise ValueError(f'There should be only four atomic indices for the command: {line.strip()}')
+
+                    index1 = int(line.strip().split()[1])
+                    index2 = int(line.strip().split()[2])
+                    index3 = int(line.strip().split()[3])
+                    index4 = int(line.strip().split()[4])
+
+                    dihedral_indices = [index1-1, index2-1, index3-1, index4-1]
+
+                    dihedral = atoms.get_dihedral(*dihedral_indices)
+                    constraints.append(FixInternals(dihedrals=[[dihedral, dihedral_indices]]))
                     
+                    info_message.append(f'Fixing dihedral between atoms {index1}, {index2}, {index3}, and {index4} with dihedral of {dihedral}.\n')
+
                 elif line.strip().split()[0] == 'S':
                     raise NotImplementedError('The scan command is not implemented yet.')
                 
 
         except ValueError as e:
+            self.log_info(info_message)
             self.log_error(str(e))
             raise
 
