@@ -2,8 +2,10 @@ import os
 import torch
 import torchani
 
+import tad_dftd4 as d4
+
 class Calculator():		 
-    def __init__(self, model: int = 1, gpuid: int = None, output: str = None)-> torchani.ase.Calculator:
+    def __init__(self, model: int = 1, gpuid: int = None, output: str = None, d4:bool=True)-> torchani.ase.Calculator:
         """
         Args:
             model: int, default=1
@@ -42,6 +44,8 @@ class Calculator():
 
         self.model_path = model_path
         self.gpuid = gpuid
+        
+        self.d4 = True
 
         self.log_info(info_message)
     
@@ -91,9 +95,14 @@ class Calculator():
             info_message.append('Using CPU for calculation.')
 
         nnp1 = nnp1.to(device)
+
+        if self.d4:
+            info_message.append('\nDFT-D4 correction is enabled.\n')
+
+
         self.log_info(info_message)
         # set the calculator
-        return torchani.ase.Calculator(consts.species, nnp1)
+        return torchani.ase.Calculator(consts.species, nnp1, d4=self.d4)
     
     def log_error(self, error_message: str) -> None:
         """

@@ -50,6 +50,7 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 	"""
 	
 	# Initial approximation of inverse Hessian 1./70. is to emulate the behaviour of BFGS. 
+
 	H0 = 1. / curvature
 	alph=1.0
 	p = None  
@@ -62,12 +63,14 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 	dr = atoms.get_positions()-r0
 	e  = atoms.get_potential_energy(force_consistent=True)
 	f  = atoms.get_forces()
+
 	f0 = f*1.0
 	q  = -f*1.0
 
-
 	convergence = False
 	a = np.empty((memory,), dtype=np.float64)
+
+
 
 	while not convergence and iteration < maxiteration:
 		   

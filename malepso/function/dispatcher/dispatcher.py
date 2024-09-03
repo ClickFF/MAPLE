@@ -8,11 +8,20 @@ class Dispatcher():
 
     def __call__(self, jobtype: int, atoms: Atoms, output:str, method: str='LBFGS') -> None:
 
+        # jobtype: 1 for optimization, 2 for single point energy, 3 for scan,
+        #            4 for frequency, 5 for transition state search
+
         if jobtype == 1:
             from .optimization import Optmization
 
             opt = Optmization(output=output, atoms=atoms, method=method)
             opt.run()
+        elif jobtype == 4:
+            from .frequency import Frequency
+
+            freq = Frequency(output=output, atoms=atoms)
+            freq.run()
+
         else:
             try:
                 raise NotImplementedError('Job type not implemented')

@@ -80,7 +80,7 @@ class InputReader():
                     if line.strip() == '':
                         post_processing_flag = True  # All post-processing commands are read.
                     else:
-                        post_processing.append(line)
+                        post_processing.append(line.strip())
 
 
 
@@ -110,6 +110,10 @@ class InputReader():
 
         # Process molecules and write to the output file
         atoms = self.element_and_coordinates(molecules)
+
+        if post_processing:
+            # Process post-processing commands and write to the output file
+            self.post_processing_command(post_processing,atoms)
 
         return atoms
 
@@ -264,4 +268,78 @@ class InputReader():
 
         self.log_info(info_message)
 
+        return atoms
+    
+    def post_processing_command(self, post_processing: list, atoms:Atoms) -> None:
+        """
+        This function is used to preprocess the post-processing commands.
+
+        Args:
+            post_processing: The list of post-processing commands to be preprocessed.
+        """
+
+        post_processing_keywords = ['C','B','A','D','S']
+        # C: Coordinates fix
+        # B: Bond fix
+        # A: Angle fix
+        # D: Dihedral fix
+        # S: Scan
+
+        constraints = []
+        info_message = ['\nPerforming the constraints and restraints ...\n']
+        try:
+            for line in post_processing:
+                if line.strip().split()[0] not in post_processing_keywords:
+                    raise ValueError(f'Invalid post-processing command: {line.strip()}')
+                
+                elif line.strip().split()[0] == 'C':
+                    if len(line.strip().split()) != 2:
+                        raise ValueError(f'There should be only one atomic index for the command: {line.strip()}')
+                    
+
+                elif line.strip().split()[0] == 'B':
+                    if len(line.strip().split()) != 3:
+                        raise ValueError(f'There should be only two atomic indices for the command: {line.strip()}')
+
+                    from ase.constraints import FixBondLengths
+                    from .restrain import Position_restraints
+                    index1 = int(line.strip().split()[1])
+                    index2 = int(line.strip().split()[2])
+
+                    distance = atoms.get_distance(index1, index2)
+                    info_message.append(f'Fixing bond between atoms {index1} and {index2} with distance of {distance}.\n')
+                    #fixbond = FixBondLengths([(index1, index2)])
+                    #self.maxiter=50000
+                    #fixbond.tolerance=1e-10
+                    #constraints.append(fixbond)
+                    from ase.constraints import FixInternals
+
+                    constraints.append(FixInternals(bonds=[[distance,[index1, index2]]]))
+
+                    #print(FixInternals(bonds=[(index1, index2)]).bonds)
+
+                elif line.strip().split()[0] == 'A':
+                    if len(line.strip().split()) != 4:
+                        raise ValueError(f'There should be only three atomic indices for the command: {line.strip()}')
+
+                elif line.strip().split()[0] == 'D':
+                    if len(line.strip().split()) != 5:
+                        raise ValueError(f'There should be only four atomic indices for the command: {line.strip()}')
+                    
+                elif line.strip().split()[0] == 'S':
+                    raise NotImplementedError('The scan command is not implemented yet.')
+                
+
+        except ValueError as e:
+            self.log_error(str(e))
+            raise
+
+        try:
+            for constraint in constraints:
+                atoms.set_constraint(constraint)
+        except Exception as e:
+            self.log_error(str(e))
+            raise
+
+        self.log_info(info_message)
         return atoms

@@ -12,13 +12,8 @@ This tutorial illustrates how to manually load model from `NeuroChem files`_.
 
 ###############################################################################
 # To begin with, let's first import the modules we will use:
-import os
-import getopt
-import sys
-import time
 
 import numpy as np
-import ase
 
 from ase import Atoms 
 import torchani
@@ -236,11 +231,6 @@ class engine():
         # Close the file
         outfile.close()
 """
-if __name__ == '__main__':
-    input_file_name = '/data1/wayne/software/MaLePSO/malepso/function/job.inp'
-
-    engine = engine()
-    engine(input_file_name)
 
 
 

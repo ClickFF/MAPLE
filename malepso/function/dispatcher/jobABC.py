@@ -6,6 +6,10 @@ class JobABC(ABC):
     def __init__(self,output:str):
         self.output = output
 
+    @abstractmethod
+    def run(self):
+        pass
+
     def log_error(self, error_message: str) -> None:
         """
         Logs error messages to the output file.
