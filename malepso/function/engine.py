@@ -18,8 +18,8 @@ import numpy as np
 from ase import Atoms 
 import torchani
 
-from function.read import InputReader
-from function.calculator import Calculator
+from ..function.read import InputReader
+from ..function.calculator import Calculator
 
 g_au=27.211386024367243
 
@@ -42,6 +42,9 @@ class engine():
         # 5: ts
 
         self.calulator = None
+
+        self.d4 = False
+        # DFT-D4 dispersion correction
 
     def __call__(self, input_file_name:str,output_file_name:str=None):
         """
@@ -72,6 +75,7 @@ class engine():
         self.gpuid = reader.gpuid
         self.model = reader.model
         self.jobtype = reader.jobtype
+        self.d4 = reader.d4
 
     
     def _mlp_initiator(self, model:int, gpuid:int) -> torchani.ase.Calculator:
@@ -88,7 +92,7 @@ class engine():
                 gpuid: int
                     The GPU ID to be used for calculation. If None, use CPU. Default is None.
         """
-        calculator = Calculator(model, gpuid, self.output)
+        calculator = Calculator(model, gpuid, self.output,d4=self.d4)
         self.calulator = calculator.construct_calculator()
 
         return self.calulator

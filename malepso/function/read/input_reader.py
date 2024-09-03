@@ -25,6 +25,8 @@ class InputReader():
         # 4: freq
         # 5: ts
 
+        self.d4:bool = False
+
     def __call__(self, input_file_name: str, output_file_name: str = None) -> Atoms:
         """
         The class is used to read the input file.
@@ -146,7 +148,7 @@ class InputReader():
             settings: The command to be preprocessed.
         """
 
-        keywords = ['model', 'gpuid', 'jobtype']
+        keywords = ['model', 'gpuid', 'jobtype', 'd4']
         model_dict = {'ANI-2x':1, 'ANI-1x':2, 'ANI-1ccx':3, 'ANI-1xnr':4}
         jobtype_dict = {'opt':1, 'sp':2, 'scan':3, 'freq':4, 'ts':5}
 
@@ -196,6 +198,17 @@ class InputReader():
                                 info_message.append(f'Job type: {value}.\n')
                             else:
                                 raise ValueError(f'The job type \'{value}\' is not recognized.')
+                    
+                    # Set the DFT-D4 dispersion correction
+                    elif key == 'd4':
+                        if value.lower() == 'true':
+                            self.d4 = True
+                            info_message.append('DFT-D4 dispersion correction is enabled.\n')
+                        elif value.lower() == 'false':
+                            self.d4 = False
+                            info_message.append('DFT-D4 dispersion correction is disabled.\n')
+                        else:
+                            raise ValueError(f'Invalid D4 setting: {value}')
 
                 else:
                     raise ValueError(f'The setting: \'{line.strip()}\' is not recognized.')

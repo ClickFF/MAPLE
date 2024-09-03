@@ -5,7 +5,7 @@ import torchani
 import tad_dftd4 as d4
 
 class Calculator():		 
-    def __init__(self, model: int = 1, gpuid: int = None, output: str = None, d4:bool=True)-> torchani.ase.Calculator:
+    def __init__(self, model: int = 1, gpuid: int = None, output: str = None, d4:bool=False)-> torchani.ase.Calculator:
         """
         Args:
             model: int, default=1
@@ -45,7 +45,7 @@ class Calculator():
         self.model_path = model_path
         self.gpuid = gpuid
         
-        self.d4 = True
+        self.d4 = d4
 
         self.log_info(info_message)
     
@@ -97,7 +97,7 @@ class Calculator():
         nnp1 = nnp1.to(device)
 
         if self.d4:
-            info_message.append('\nDFT-D4 correction is enabled.\n')
+            info_message.append('\nSetting up D4 dispersion correction...\n')
 
 
         self.log_info(info_message)

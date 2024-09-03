@@ -1,0 +1,1 @@
+from .sp import SinglePoint

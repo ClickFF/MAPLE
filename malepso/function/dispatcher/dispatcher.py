@@ -16,12 +16,16 @@ class Dispatcher():
 
             opt = Optmization(output=output, atoms=atoms, method=method)
             opt.run()
+        elif jobtype == 2:
+            from .sp import SinglePoint
+
+            sp = SinglePoint(output=output, atoms=atoms)
+            sp.run()
         elif jobtype == 4:
             from .frequency import Frequency
 
             freq = Frequency(output=output, atoms=atoms)
             freq.run()
-
         else:
             try:
                 raise NotImplementedError('Job type not implemented')
