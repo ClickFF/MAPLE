@@ -1,4 +1,5 @@
 import numpy as np
+import os
 
 def parse_coordinates(lines):
     """从文件中解析原子坐标，同时记录原子类型."""
@@ -49,7 +50,11 @@ def write_xyz(filename, trajectory, elements):
 
 def main():
     # 读取文件内容
-    with open('./MaLePSO/freq.out', 'r') as file:
+    filename = 'freq'
+    path = os.path.dirname(os.path.abspath(__file__))
+    filein = os.path.join(path, f'{filename}.out')
+    fileout = os.path.join(path, f'{filename}.xyz')
+    with open(filein, 'r') as file:
         lines = file.readlines()
 
     # 解析坐标部分
@@ -63,7 +68,7 @@ def main():
     atom_num = len(elements)  # 获取原子数量
 
     # 获取特征向量
-    freq_num = 1  # 假设我们需要Frequency 1
+    freq_num = 2  # 假设我们需要Frequency 1
     eigenvectors = parse_frequencies(lines, freq_num, atom_num)
     
     # 计算末态坐标
@@ -77,7 +82,7 @@ def main():
     trajectory.extend(interpolate_coordinates(final_coordinates, coordinates, interpolations))
     
     # 写入xyz文件
-    write_xyz('freq.xyz', trajectory, elements)
+    write_xyz(fileout, trajectory, elements)
 
 if __name__ == "__main__":
     main()

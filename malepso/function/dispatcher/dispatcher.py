@@ -6,7 +6,7 @@ class Dispatcher():
     def __init__(self):
         pass
 
-    def __call__(self, jobtype: int, atoms: Atoms, output:str, method: str='LBFGS') -> None:
+    def __call__(self, jobtype: int, atoms: Atoms, output:str, method: str='RFO') -> None:
 
         # jobtype: 1 for optimization, 2 for single point energy, 3 for scan,
         #            4 for frequency, 5 for transition state search
@@ -26,6 +26,11 @@ class Dispatcher():
 
             freq = Frequency(output=output, atoms=atoms)
             freq.run()
+        elif jobtype == 5:
+            from .ts import TransitionState
+
+            ts = TransitionState(output=output, atoms=atoms)
+            ts.run()
         else:
             try:
                 raise NotImplementedError('Job type not implemented')

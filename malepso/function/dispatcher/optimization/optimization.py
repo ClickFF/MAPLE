@@ -20,4 +20,6 @@ class Optmization(JobABC):
         if self.method == 'LBFGS':
             from .algorithm import LBFGS
             LBFGS(self.atoms, output=self.output)
-    
+        elif self.method == 'RFO':
+            from .algorithm import RFO
+            RFO(self.atoms, output=self.output)
