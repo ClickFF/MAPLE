@@ -8,6 +8,7 @@ import numpy as np
 import sys
 import torch
 from ase import Atoms
+from scipy.optimize import brentq
 
 from .logger import *
 
@@ -38,7 +39,6 @@ def RFO(atoms: Atoms, output):
 		lambda_val = calculate_lambda(eigvals, gradient.flatten())
 		
 		eigvals = np.real(eigvals).astype(np.float32)
-		lambda_val = np.real(lambda_val).astype(np.float32)
 		# 去除 Hessian 的批次维度
 		Hessian_squeezed = Hessian.squeeze(0)  # 变为 (66, 66)
 		# 将梯度转换为二维列向量 (66, 1)
@@ -132,68 +132,51 @@ def calculate_Hessian(atoms: Atoms):
 	return Hessian
 
 
-def calculate_lambda(eigvals, gradient, max_iter=32, tol=1e-5, lr=0.01, init=100.0):
-	"""
-	使用梯度下降法和牛顿法计算 RFO 算法中的拉姆达参数 λ。
+def f(lambda_val, eigvals, gradient):
+    """
+    定义方程的求解函数 f(λ) = sum(g_i^2 / (λ - h_i)) - λ
+    该函数将用于 Bracketing 方法(Brent's Method)中寻找根.
+    
+    参数:
+    - lambda_val: λ 的当前值
+    - eigvals: Hessian 矩阵的特征值 (numpy 数组)
+    - gradient: 梯度向量 (numpy 数组)
+    
+    返回:
+    - 目标函数值 f(λ)
+    """
+    squared_g = gradient ** 2
+    return np.sum(squared_g / (lambda_val - eigvals)) - lambda_val
 
-	参数:
-	- eigvals: Hessian 矩阵的特征值 (torch tensor)
-	- gradient: 梯度向量 (torch tensor)
-	- max_iter: 最大迭代次数 (默认值为32)
-	- tol: 收敛容忍度 (默认值为1e-5)
-	- lr: 学习率 (默认值为0.01)
-	- init: 初始 λ 值 (默认值为1.0)
-
-	返回:
-	- λ: 计算得到的拉姆达值
-	"""
-
-	# Step 1: 梯度下降法计算 λ
-	lambda_val = torch.tensor(np.min(eigvals) - init, dtype=torch.float32, requires_grad=True)
-	eigvals_tensor = torch.tensor(eigvals, dtype=torch.float32)
-	gradient_tensor = torch.tensor(gradient, dtype=torch.float32)
-	squared_g_tensor = gradient_tensor ** 2
-
-	for iteration in range(max_iter):
-		# 计算目标函数的值: sum(g_i^2 / (λ - h_i))
-		loss = torch.sum(squared_g_tensor / (lambda_val - eigvals_tensor))
-		
-		# 计算 (loss - λ) 的绝对值来检查是否收敛
-		if torch.abs(loss - lambda_val) < tol:
-			break
-
-		# 使用 PyTorch 进行梯度计算
-		loss.backward()
-
-		# 梯度下降更新 λ
-		with torch.no_grad():
-			lambda_val -= lr * lambda_val.grad
-
-		# 清零梯度
-		lambda_val.grad.zero_()
-
-	# Step 2: 牛顿法精确求解 λ
-	lambda_accurate = lambda_val.detach().numpy()  # 保持实数域
-	g = gradient.flatten()
-	squared_g = g ** 2
-	lambda_accurate = np.complex128(lambda_accurate)
-	# 迭代使用牛顿法来优化 λ
-	for iteration in range(max_iter):
-		# 计算 sum(g_i^2 / (λ - h_i))
-		sum_val = np.sum(squared_g / (lambda_accurate - eigvals))
-		
-		# 检查收敛
-		if abs(sum_val - lambda_accurate) < tol:
-			break
-
-		# 计算牛顿法需要的分子和分母
-		numerator:np.complex128 = sum_val - lambda_accurate
-		denominator:np.complex128 = np.sum(-squared_g / (lambda_accurate - eigvals)**2) - 1
-		
-		# 更新 λ
-		lambda_accurate -= numerator / denominator
-
-	return lambda_accurate
+def calculate_lambda(eigvals, gradient, tol=1e-5, max_iter=64):
+    """
+    使用 Brent's Method 计算 RFO 算法中的拉姆达参数 λ。
+    
+    参数:
+    - eigvals: Hessian 矩阵的特征值 (torch tensor)
+    - gradient: 梯度向量 (torch tensor)
+    - tol: 收敛容忍度 (默认值为1e-5)
+    
+    返回:
+    - λ: 计算得到的最小拉姆达值
+    """
+    # 转换为 numpy 数组进行求解
+    eigvals_np = eigvals
+    gradient_np = gradient
+    
+    # 选择区间的上下界, 保证 λ < h_min (即特征值中的最小值)
+    h_min = np.min(eigvals_np)
+    a = h_min - 1e2  # 区间左边界，取 h_min 之前的一个大负数
+    b = h_min - 1e-6  # 区间右边界，略小于 h_min，避免奇异点
+    
+    # 检查区间两端 f(a) 和 f(b) 的符号是否相反，保证函数有根
+    if f(a, eigvals_np, gradient_np) * f(b, eigvals_np, gradient_np) >= 0:
+        raise ValueError("无法找到有效的区间 (a, b)，请调整区间或输入数据。")
+    
+    # 使用 Brent's Method 找到方程的根
+    lambda_root = brentq(f, a, b, args=(eigvals_np, gradient_np), xtol=tol, maxiter=max_iter)
+    
+    return lambda_root
 
 
 
