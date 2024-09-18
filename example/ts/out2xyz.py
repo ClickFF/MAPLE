@@ -1,7 +1,11 @@
 import re
+import os
 
 def process_coordinates(file_path, output_path):
-    with open(file_path, 'r') as file:
+    path = os.path.dirname(os.path.abspath(__file__))
+    filein = os.path.join(path, f'{file_path}.out')
+    fileout = os.path.join(path, f'{output_path}.xyz')
+    with open(filein, 'r') as file:
         lines = file.readlines()
 
     atom_count = 0
@@ -34,8 +38,8 @@ def process_coordinates(file_path, output_path):
         coordinates.append(f"{atom_count}\nFrame {frame_num}: {frame_num}\n" + frame_data)
 
     # 将结果写入输出文件
-    with open(output_path, 'w') as out_file:
+    with open(fileout, 'w') as out_file:
         out_file.writelines(coordinates)
 
 # 使用示例
-process_coordinates('ts.out', 'ts.xyz')
+process_coordinates('prfo', 'prfo')
