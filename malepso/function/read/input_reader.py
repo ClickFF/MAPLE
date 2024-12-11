@@ -336,11 +336,11 @@ class InputReader():
                     index2 = int(line.strip().split()[2])
                     index3 = int(line.strip().split()[3])
 
-                    angle_indices = [index1-1, index2-1, index3-1]
-                    angle1 = [atoms.get_angle(index1-1,index2-1,index3-1), angle_indices]
-                    FixInternals(angles=[angle1])
+                    degree = atoms.get_angle(index1-1,index2-1,index3-1)
+                    angle1 = [degree, [index1-1, index2-1, index3-1]]
+                    constraints.append(FixInternals(angles_deg=[angle1]))
 
-                    info_message.append(f'Fixing angle between atoms {index1}, {index2}, and {index3} with angle of {angle}.\n')
+                    info_message.append(f'Fixing angle between atoms {index1}, {index2}, and {index3} with angle of {degree}.\n')
 
                 elif line.strip().split()[0] == 'D':
                     if len(line.strip().split()) != 5:
@@ -354,7 +354,7 @@ class InputReader():
                     dihedral_indices = [index1-1, index2-1, index3-1, index4-1]
 
                     dihedral = atoms.get_dihedral(*dihedral_indices)
-                    constraints.append(FixInternals(dihedrals=[[dihedral, dihedral_indices]]))
+                    constraints.append(FixInternals(dihedrals_deg=[[dihedral, dihedral_indices]]))
                     
                     info_message.append(f'Fixing dihedral between atoms {index1}, {index2}, {index3}, and {index4} with dihedral of {dihedral}.\n')
 

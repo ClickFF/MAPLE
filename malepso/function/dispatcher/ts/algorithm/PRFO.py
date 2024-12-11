@@ -99,7 +99,7 @@ def RFO(atoms: Atoms, output):
 			info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
 		
 		
-		info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
+		info_message.append(f"\n\nEnergy:                {energy:>12.6f} Convergence criteria  Is converged \n")
 
 		if atoms.max_f > atoms.f_max_th:
 			info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")

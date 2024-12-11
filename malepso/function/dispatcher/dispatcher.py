@@ -21,6 +21,13 @@ class Dispatcher():
 
             sp = SinglePoint(output=output, atoms=atoms)
             sp.run()
+
+        elif jobtype == 3:
+            from .scan import Scan
+
+            scan = Scan(output=output, atoms=atoms)
+            scan.run()
+        
         elif jobtype == 4:
             from .frequency import Frequency
 

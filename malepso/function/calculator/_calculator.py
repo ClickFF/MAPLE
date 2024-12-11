@@ -57,7 +57,7 @@ class Calculator():
         model_path = self.model_path
         gpuid = self.gpuid
 
-        print(gpuid)
+        ###print(gpuid)
         info_message = []
         # find the model files
         torch.set_num_threads(2)
