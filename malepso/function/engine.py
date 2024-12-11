@@ -55,7 +55,7 @@ class engine():
         self._input_reader(input_file_name, output_file_name)
         self._mlp_initiator(self.model, self.gpuid)
         self.atoms.set_calculator(self.calulator)
-        self._jobtype_dispatcher(self.jobtype, self.atoms, self.output)
+        self._jobtype_dispatcher(self.jobtype, self.atoms, self.output, extra=self.extra)
 
     def _input_reader(self, input_file_name:str, output_file_name:str=None) -> Atoms:
         """
@@ -75,6 +75,11 @@ class engine():
         self.model = reader.model
         self.jobtype = reader.jobtype
         self.d4 = reader.d4
+
+        self.extra = {}
+
+        if self.jobtype == 3:
+            self.extra = {'scan': reader.scan_constraints}
 
     
     def _mlp_initiator(self, model:int, gpuid:int) -> torchani.ase.Calculator:
@@ -96,7 +101,7 @@ class engine():
 
         return self.calulator
     
-    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='RFO') -> None:
+    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='RFO', extra:dict=None) -> None:
         """
             This function dispatches the job type.
 
@@ -105,10 +110,11 @@ class engine():
                 atoms(Atoms): The ASE Atoms object to be optimized.
                 output(str): The path to the output file.
                 method(str): The optimization method to be used. (Default: LBFGS)
+                extra(dict): Extra parameters to be passed to the job.
         """
         
         dispatcher = Dispatcher()
-        dispatcher(jobtype, atoms, output, method)
+        dispatcher(jobtype, atoms, output, method, extra)
     
 
 

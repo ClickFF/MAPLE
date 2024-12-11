@@ -6,7 +6,7 @@ class Dispatcher():
     def __init__(self):
         pass
 
-    def __call__(self, jobtype: int, atoms: Atoms, output:str, method: str='RFO') -> None:
+    def __call__(self, jobtype: int, atoms: Atoms, output:str, method: str='RFO', extra:dict=None) -> None:
 
         # jobtype: 1 for optimization, 2 for single point energy, 3 for scan,
         #            4 for frequency, 5 for transition state search
@@ -25,7 +25,13 @@ class Dispatcher():
         elif jobtype == 3:
             from .scan import Scan
 
-            scan = Scan(output=output, atoms=atoms)
+            if extra is not None:
+                if 'scan' not in extra:
+                    raise ValueError('Constraints not provided for scan job')
+            else:
+                raise ValueError('Constraints not provided for scan job')
+            
+            scan = Scan(output=output, atoms=atoms, method=method, constraints=extra['scan'])
             scan.run()
         
         elif jobtype == 4:

@@ -27,6 +27,8 @@ class InputReader():
 
         self.d4:bool = False
 
+        self.scan = False
+
     def __call__(self, input_file_name: str, output_file_name: str = None) -> Atoms:
         """
         The class is used to read the input file.
@@ -315,6 +317,7 @@ class InputReader():
                     index = int(line.strip().split()[1])
 
                     constraints.append(FixAtoms(indices=[index-1]))
+                    info_message.append(f'Fixing atom {index}.\n')
 
                 elif line.strip().split()[0] == 'B':
                     if len(line.strip().split()) != 3:
@@ -359,7 +362,46 @@ class InputReader():
                     info_message.append(f'Fixing dihedral between atoms {index1}, {index2}, {index3}, and {index4} with dihedral of {dihedral}.\n')
 
                 elif line.strip().split()[0] == 'S':
-                    raise NotImplementedError('The scan command is not implemented yet.')
+                    if self.scan == False:
+                        self.scan_constraints = []
+                        self.scan = True
+                    if self.jobtype != 3:
+                        raise ValueError(f'The scan command is only available for the scan jobtype.')
+                    parts = line.strip().split()
+                    try:
+                        # Check the type of variables
+                        numbers = [int(parts[i]) if i != len(parts) - 2 else float(parts[i]) for i in range(1, len(parts))]
+                        
+                        # Check the sign of the variables
+                        for i in range(len(numbers)):
+                            if i != len(numbers) - 2 and numbers[i] <= 0:
+                                raise ValueError(f'All integers except the second last must be positive: {line.strip()}')
+                        
+                        self.scan_constraints.append(numbers)
+                        
+                        # Determine the scan type
+                        if len(numbers)-2 == 4:
+                            scan_type = "dihedral"
+                        elif len(numbers)-2 == 3:
+                            scan_type = "angle"
+                        elif len(numbers)-2 == 2:
+                            scan_type = "bond"
+                        else:
+                            raise ValueError(f'Invalid number of parameters for scan command: {line.strip()}')
+                        
+                        # Get atom indices and steps
+                        atom_indices = numbers[:-2]
+                        steps = int(numbers[-1])
+                        
+                        # Log the scan information
+                        info_message.append(f'Scanning {scan_type} with atomic indices {atom_indices}, for a total of {steps} steps.\n')
+
+                    except ValueError as e:
+                        raise ValueError(f'Invalid format for scan command: {line.strip()}') from e
+                    
+                    
+                    
+                    #raise NotImplementedError('The scan command is not implemented yet.')
                 
 
         except ValueError as e:
