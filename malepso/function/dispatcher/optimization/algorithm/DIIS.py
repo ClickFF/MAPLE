@@ -30,8 +30,7 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
         the maximum step size: {max_step_size} Angstrom')
     log_info(info_message, output)
     
-        # Add after line 33
-    SD(atoms, output, max_step_size, 10, diis_storage)  # Run SD for 10 steps
+
 
     diis_storage = OptimizationStorage()
     diis_x_vectors = diis_storage.diis_x_vectors
@@ -81,11 +80,6 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
 
     atoms.set_positions(new_position)
 
-    if atoms.max_f > atoms.f_max_th and atoms.rms_f > atoms.f_rms_th and atoms.max_dp > atoms.dp_max_th and atoms.rms_dp > atoms.dp_rms_th:
-        converged = True
-    else:
-        converged = False
-
    
     # ===== LOG ITERATION ( LIKE LBFGS) =====
 
@@ -124,7 +118,7 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
     # Write to output file
     log_info(info_message, output)
 
-    return converged
+    return
 
 
 
