@@ -117,6 +117,9 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 		f0 = f*1.0
 		iteration += 1
 		atoms.set_positions(r0+alph*dr) 
+		##save the atoms/define flag set to falso at the beginning, after ten times set to true 
+		##then those ten will be led to diis, diis is run and the flag is set to false again, list is always reset 
+		
 		r = atoms.get_positions()
 		f = atoms.get_forces()
 		e = atoms.get_potential_energy(force_consistent=True)
