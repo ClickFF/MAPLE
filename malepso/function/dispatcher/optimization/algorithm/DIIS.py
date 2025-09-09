@@ -1,7 +1,7 @@
 import numpy as np
 from ase import Atoms
 from .logger import *
-from .SD import SD
+
 
 g_au = 27.211386024367243
 
@@ -11,7 +11,7 @@ class OptimizationStorage:
         self.diis_error_vectors = []
         self.iteration = 0
 
-def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiterations=128) -> int:
+def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiterations=128, storage=None) -> int:
     """
     This function is used to perform the DIIS optimization. I still need to add proper logging, test and optimize 
 
@@ -32,9 +32,16 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
     
 
 
-    diis_storage = OptimizationStorage()
-    diis_x_vectors = diis_storage.diis_x_vectors
-    diis_error_vectors = diis_storage.diis_error_vectors
+    # Replace lines 35-37 with:
+    if storage is not None:
+        diis_x_vectors = storage.diis_x_vectors
+        diis_error_vectors = storage.diis_error_vectors
+        iteration = storage.iteration
+    else:
+        diis_storage = OptimizationStorage()
+        diis_x_vectors = diis_storage.diis_x_vectors
+        diis_error_vectors = diis_storage.diis_error_vectors
+        iteration = 0
     
     converged = False
 
@@ -79,8 +86,16 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
         new_position = atoms.get_positions() + step
 
     atoms.set_positions(new_position)
-
-   
+    
+    # Calculate forces for convergence check after DIIS step
+    forces = atoms.get_forces()
+    atoms.max_f = abs(forces).max()
+    atoms.rms_f = np.sqrt((forces**2).sum() / forces.size)
+    
+    # Calculate displacements
+    atoms.max_dp = abs(step).max() if 'step' in locals() else 0.0
+    atoms.rms_dp = np.sqrt((step**2).sum() / step.size) if 'step' in locals() else 0.0
+    
     # ===== LOG ITERATION ( LIKE LBFGS) =====
 
     info_message.append(f'\n{"Coordinates".center(70)}\n')
@@ -92,7 +107,9 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
         coord = atom.position 
         info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
     
-    info_message.append(f"\n\nEnergy:                {e/g_au:>12.6f} Convergence criteria  Is converged \n")
+    # Add before line 102:
+    energy = atoms.get_potential_energy(force_consistent=True)
+    info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
 
     # Force convergence check
     if atoms.max_f > atoms.f_max_th:
@@ -118,7 +135,7 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
     # Write to output file
     log_info(info_message, output)
 
-    return
+    return iteration
 
 
 

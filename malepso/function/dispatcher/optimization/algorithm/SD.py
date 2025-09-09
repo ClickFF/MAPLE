@@ -2,7 +2,7 @@ import numpy as np
 from ase import Atoms
 from .logger import *
 from .DIIS import OptimizationStorage
-from .DIIS import DIIS
+#from .DIIS import DIIS
 
 g_au = 27.211386024367243
 
@@ -48,6 +48,7 @@ def SD(atoms: Atoms, output: str, max_step_size=0.2, maxiterations=128) -> int:
         
         # Call DIIS every 10 iterations
         if diis_counter >= 10:
+            from .DIIS import DIIS
             return DIIS(atoms, output, max_step_size=max_step_size, maxiterations=maxiterations, storage=diis_storage)
         
     

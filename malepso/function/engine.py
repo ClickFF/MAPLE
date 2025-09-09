@@ -101,7 +101,7 @@ class engine():
 
         return self.calulator
     
-    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='DIIS', extra:dict=None) -> None:
+    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='LBFGS', extra:dict=None) -> None:
         """
             This function dispatches the job type.
 
