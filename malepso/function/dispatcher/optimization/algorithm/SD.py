@@ -18,7 +18,6 @@ def SD(atoms: Atoms, output: str, max_step_size=0.2, maxiterations=128) -> int:
     """
 
     info_message = ['Running the Steepest Descent ...\n']
-    info_message = ['Running the DIIS ...\n']
     if max_step_size > 1.0:
         info_message.append(f'You are using a much too large value for \
         the maximum step size: {max_step_size} Angstrom')
@@ -49,12 +48,13 @@ def SD(atoms: Atoms, output: str, max_step_size=0.2, maxiterations=128) -> int:
         # Call DIIS every 10 iterations
         if diis_counter >= 10:
             from .DIIS import DIIS
-            return DIIS(atoms, output, max_step_size=max_step_size, maxiterations=maxiterations, storage=diis_storage)
+            DIIS(atoms, output, max_step_size=max_step_size, maxiterations=maxiterations, storage=diis_storage)
+            diis_counter = 0  # Reset counter to continue SD
         
     
         #Steepest Descent 
         step = max_step_size * forces
-        step_length = np.max((step**2).sum(1)**0.5)
+        step_length = np.sqrt((step**2).sum())
 
         if step_length >= max_step_size:
             step *= max_step_size / step_length
