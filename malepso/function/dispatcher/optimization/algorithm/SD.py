@@ -50,6 +50,7 @@ def SD(atoms: Atoms, output: str, max_step_size=0.2, maxiterations=128) -> int:
             from .DIIS import DIIS
             DIIS(atoms, output, max_step_size=max_step_size, maxiterations=maxiterations, storage=diis_storage)
             diis_counter = 0  # Reset counter to continue SD
+            diis_storage.reset()
         
     
         #Steepest Descent 

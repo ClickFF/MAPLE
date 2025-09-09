@@ -89,6 +89,7 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 		if diis_counter >= 10:
 			DIIS(atoms, output, max_step_size=maxstep, maxiterations=maxiteration, storage=diis_storage)
 			diis_counter = 0  # Reset counter to continue LBFGS
+			diis_storage.reset() 
 		
 		if iteration > 0:
 			s0 = alph*dr
