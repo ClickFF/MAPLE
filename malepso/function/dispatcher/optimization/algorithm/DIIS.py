@@ -10,7 +10,7 @@ class OptimizationStorage:
         self.diis_x_vectors = []
         self.diis_error_vectors = []
         self.iteration = 0
-    #define method to reset the storage and default
+    #method to reset the storage and default
     def reset(self):
         self.diis_x_vectors = []
         self.diis_error_vectors = []
@@ -37,8 +37,6 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
     log_info(info_message, output)
     
 
-
-    # Replace lines 35-37 with:
     if storage is not None:
         diis_x_vectors = storage.diis_x_vectors
         diis_error_vectors = storage.diis_error_vectors
@@ -49,8 +47,6 @@ def DIIS(atoms: Atoms, output: str, memory = 10, max_step_size= 0.2, maxiteratio
         diis_error_vectors = diis_storage.diis_error_vectors
         iteration = 0
     
-    converged = False
-
 
     
     m = len(diis_error_vectors)
