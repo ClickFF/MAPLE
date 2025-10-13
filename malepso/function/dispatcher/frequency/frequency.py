@@ -13,14 +13,14 @@ class Frequency(JobABC):
         super().__init__(output)
         self.atoms = atoms
 
-    def run(self):
+    def run(self): 
         hessian_matrix = self.get_hessian()
         weighted_hessian = self.MWeightHessian(hessian_matrix)
         frequencies = self.get_frequencies(weighted_hessian)
 
     def get_hessian(self) -> np.ndarray:
         calc = self.atoms.get_calculator()
-        hessian_matrix: Tensor = calc.get_hessian(self.atoms)  # 获取 Hessian 矩阵
+        hessian_matrix: Tensor = calc.get_hessian(self.atoms)  # 获取 Hessian 矩阵 
         masses = np.array([atom.mass for atom in self.atoms])  # 获取原子质量数组
 
         # 转换为 PyTorch tensor，并调整形状

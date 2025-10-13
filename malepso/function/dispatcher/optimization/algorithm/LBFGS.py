@@ -3,6 +3,8 @@ import numpy as np
 from ase import Atoms
 
 from .logger import *
+from .DIIS import OptimizationStorage
+from .DIIS import DIIS
 
 ###############################
 g_au=27.211386024367243
@@ -63,6 +65,10 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 	dr = atoms.get_positions()-r0
 	e  = atoms.get_potential_energy(force_consistent=True)
 	f  = atoms.get_forces()
+	
+	diis_storage = OptimizationStorage()
+	diis_counter = 0
+
 
 	f0 = f*1.0
 	q  = -f*1.0
@@ -73,7 +79,18 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 
 
 	while not convergence and iteration < maxiteration:
-		   
+		# Store for DIIS
+		diis_storage.diis_x_vectors.append(atoms.get_positions().copy())
+		diis_storage.diis_error_vectors.append(f.copy())
+		diis_storage.iteration = iteration
+		diis_counter += 1
+		
+		# Call DIIS every 10 iterations
+		if diis_counter >= 10:
+			DIIS(atoms, output, max_step_size=maxstep, maxiterations=maxiteration, storage=diis_storage)
+			diis_counter = 0  # Reset counter to continue LBFGS
+			diis_storage.reset() 
+		
 		if iteration > 0:
 			s0 = alph*dr
 			s.append(s0)
@@ -117,6 +134,9 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 		f0 = f*1.0
 		iteration += 1
 		atoms.set_positions(r0+alph*dr) 
+		##save the atoms/define flag set to falso at the beginning, after ten times set to true 
+		##then those ten will be led to diis, diis is run and the flag is set to false again, list is always reset 
+
 		r = atoms.get_positions()
 		f = atoms.get_forces()
 		e = atoms.get_potential_energy(force_consistent=True)
