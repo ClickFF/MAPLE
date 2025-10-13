@@ -6,6 +6,7 @@ from ase import Atoms
 import numpy as np
 
 from .filereader import XYZReader
+from .command_control import CommandControl
 
 class InputReader():
     def __init__(self):
@@ -208,91 +209,26 @@ class InputReader():
 
     def settings_command(self, settings: list):
         """
-        This function is used to preprocess the command.
-
-        Args:
-            settings: The command to be preprocessed.
+        Parse all # commands using CommandControl and store them in self.
         """
-
-        keywords = ['model', 'gpuid', 'jobtype', 'd4']
-        model_dict = {'ANI-2x':1, 'ANI-1x':2, 'ANI-1ccx':3, 'ANI-1xnr':4}
-        jobtype_dict = {'opt':1, 'sp':2, 'scan':3, 'freq':4, 'ts':5}
-
-        info_message = ['Preprocessing the settings ...\n']
-
         try:
-            for line in settings:
-                # Remove the comment indicator and split by '='
-                parts = line[1:].split('=')
-                if len(parts) != 2:
-                    raise ValueError(f'Invalid format for setting: {line.strip()}')
+            cc = CommandControl.from_settings(settings, output_path=self.output)
+            self.command_control = cc
+            params = cc.as_dict()
 
-                key = parts[0].strip()
-                value = parts[1].strip()
+            # Assign key parameters
+            self.model = params.get("model").lower()
+            self.gpuid = params.get("gpuid")
+            self.d4 = params.get("d4", False)
+            self.jobtype = params.get("task")  # ← now replaces jobtype
 
-                # Debug output
-                # print(f"Processing setting: {key} = {value}")
+            self.log_info([cc.summary()])
 
-                if key in keywords:
-
-                    # Set the model
-                    if key == 'model':
-                        if self.model is not None:
-                            raise ValueError('You set model multiple times.')
-                        else:
-                            if value in model_dict.keys():
-                                self.model = model_dict[value]
-                                info_message.append(f'Model: {value}.\n')
-                            else:
-                                raise ValueError(f'The model \'{value}\' is not recognized.')
-
-                    # Set the gpuid
-                    elif key == 'gpuid':
-                        try:
-                            self.gpuid = int(value)
-                            info_message.append(f'GPU ID: {self.gpuid}.\n')
-                        except ValueError:
-                            raise ValueError(f'Invalid GPU ID: {value}')
-
-                    # Set the jobtype
-                    elif key == 'jobtype':
-                        if self.jobtype is not None:
-                            raise ValueError('You set jobtype multiple times.')
-                        else:
-                            if value in jobtype_dict.keys():
-                                self.jobtype = jobtype_dict[value]
-                                info_message.append(f'Job type: {value}.\n')
-                            else:
-                                raise ValueError(f'The job type \'{value}\' is not recognized.')
-                    
-                    # Set the DFT-D4 dispersion correction
-                    elif key == 'd4':
-                        if value.lower() == 'true':
-                            self.d4 = True
-                            info_message.append('DFT-D4 dispersion correction is enabled.\n')
-                        elif value.lower() == 'false':
-                            self.d4 = False
-                            info_message.append('DFT-D4 dispersion correction is disabled.\n')
-                        else:
-                            raise ValueError(f'Invalid D4 setting: {value}')
-
-                else:
-                    raise ValueError(f'The setting: \'{line.strip()}\' is not recognized.')
-
-            # Final checks after processing all settings
-            if self.gpuid is None:
-                info_message.append('GPU ID is not set. Using CPU to calculate.\n')
-
-            if self.jobtype is None:
-                raise ValueError('The jobtype is not set.')
-        
         except ValueError as e:
-            self.log_info(info_message)
             self.log_error(str(e))
             raise
 
-        # Log final successful configuration
-        self.log_info(info_message)
+
 
 
     def element_and_coordinates(self, molecules: List[str]) -> Union[Atoms, List[Atoms]]:

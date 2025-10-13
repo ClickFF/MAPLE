@@ -13,7 +13,9 @@ class Dispatcher():
         # jobtype: 1 for optimization, 2 for single point energy, 3 for scan,
         #            4 for frequency, 5 for transition state search
 
-        if jobtype == 1:
+        self.output = output
+        print(f'Job type: {jobtype}')
+        if jobtype == 'opt':
             from .optimization import Optmization
 
             if isinstance(atoms, list):
@@ -21,7 +23,7 @@ class Dispatcher():
 
             opt = Optmization(output=output, atoms=atoms, method=method)
             opt.run()
-        elif jobtype == 2:
+        elif jobtype == 'sp':
             from .sp import SinglePoint
 
             if isinstance(atoms, list):
@@ -29,7 +31,7 @@ class Dispatcher():
             sp = SinglePoint(output=output, atoms=atoms)
             sp.run()
 
-        elif jobtype == 3:
+        elif jobtype == 'scan':
             from .scan import Scan
 
             if extra is not None:
@@ -43,8 +45,8 @@ class Dispatcher():
 
             scan = Scan(output=output, atoms=atoms, method=method, constraints=extra['scan'])
             scan.run()
-        
-        elif jobtype == 4:
+            
+        elif jobtype == 'freq':
             from .frequency import Frequency
 
             if isinstance(atoms, list):
@@ -52,7 +54,7 @@ class Dispatcher():
 
             freq = Frequency(output=output, atoms=atoms)
             freq.run()
-        elif jobtype == 5:
+        elif jobtype == 'ts':
             from .ts import TransitionState
 
             if isinstance(atoms, list):

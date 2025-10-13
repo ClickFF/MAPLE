@@ -63,9 +63,7 @@ class engine():
             for atom in self.atoms:
                 atom.set_calculator(self.calulator)
 
-        # Self.atoms printing   
-        print(self.atoms)
-
+        # Self.atoms printing
         self._jobtype_dispatcher(self.jobtype, self.atoms, self.output, extra=self.extra)
 
     def _input_reader(self, input_file_name:str, output_file_name:str=None) -> Atoms:
