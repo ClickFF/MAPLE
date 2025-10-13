@@ -16,7 +16,7 @@ def RFO(atoms: Atoms, output):
 	sys.setrecursionlimit(1000)
 	g_au = 27.211386024367243
 	max_iter = 256  # 最大迭代次数
-	max_step_size = 0.2  # 最大步长
+	max_step_size = 0.1  # 最大步长
 	iteration = 0  # 初始化迭代计数
 	
 	while iteration < max_iter:
@@ -62,6 +62,7 @@ def RFO(atoms: Atoms, output):
 		#detalE = predict_energy_change(x, lambda_val, eigvals, gradient)
 		#deltaE = detalE/g_au
 
+
 		# Step 5: 更新几何结构
 		X_new = X.flatten() + x
 		atoms.set_positions(X_new.reshape(-1, 3))
@@ -73,6 +74,7 @@ def RFO(atoms: Atoms, output):
 		atoms.rms_dp = np.sqrt((x**2).sum()/x.size*3)
 		atoms.max_f = abs(force).max()
 		atoms.rms_f = np.sqrt((force**2).sum()/x.size*3)
+			
 
 		# Log the information:
 		if atoms.max_f<=atoms.f_max_th and atoms.rms_f<=atoms.f_rms_th and atoms.max_dp <=atoms.dp_max_th and atoms.rms_dp<=atoms.dp_rms_th:
@@ -81,7 +83,9 @@ def RFO(atoms: Atoms, output):
 				element_type = atom.symbol 
 				coord = atom.position 
 				info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
-		
+
+			info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
+
 			if atoms.max_f > atoms.f_max_th:
 				info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")
 			else:

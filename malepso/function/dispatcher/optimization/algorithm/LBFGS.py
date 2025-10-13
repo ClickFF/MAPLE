@@ -25,7 +25,7 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 	Returns:
 	
 	"""
-	info_message = ['Running the L-BFGS ...\n']
+	info_message = []
 
 	if maxstep > 1.0:
 			info_message.append(f'You are using a much too large value for \

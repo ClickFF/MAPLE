@@ -23,8 +23,7 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 	Returns:
 	
 	"""
-	info_message = ['Running the L-BFGS ...\n']
-
+	info_message = []
 	if maxstep > 1.0:
 			info_message.append(f'You are using a much too large value for \
 			the maximum step size: {maxstep} Angstrom')
@@ -119,7 +118,7 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 		atoms.set_positions(r0+alph*dr) 
 		r = atoms.get_positions()
 		f = atoms.get_forces()
-		e = atoms.get_potential_energy(force_consistent=True)
+		energy = atoms.get_potential_energy(force_consistent=True)
 
 		# Convergence criteria:               
 		atoms.max_dp = alph * abs(dr).max()
@@ -134,7 +133,9 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 				element_type = atom.symbol 
 				coord = atom.position 
 				info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
-		
+
+			info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
+
 			if atoms.max_f > atoms.f_max_th:
 				info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")
 			else:
@@ -158,6 +159,37 @@ def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=
 			log_info(info_message,output)
 
 			return iteration 
+		
+
+	for atom_index, atom in enumerate(atoms):
+		element_type = atom.symbol 
+		coord = atom.position 
+		info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
+
+	info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
+
+	if atoms.max_f > atoms.f_max_th:
+		info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")
+	else:
+		info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                Yes\n")
+
+	if atoms.rms_f > atoms.f_rms_th:
+		info_message.append(f"RMS Force:             {atoms.rms_f/g_au:>12.6f} {atoms.f_rms_th/g_au:>12.6f}                No\n")
+	else:
+		info_message.append(f"RMS Force:             {atoms.rms_f/g_au:>12.6f} {atoms.f_rms_th/g_au:>12.6f}                Yes\n")
+
+	if atoms.max_dp > atoms.dp_max_th:
+		info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                No\n")
+	else:
+		info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                Yes\n")
+
+	if atoms.rms_dp > atoms.dp_rms_th:
+		info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                No\n")
+	else:
+		info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                Yes\n")
+
+	log_info(info_message,output)
+
 	return  iteration          	    
 #################################################################################
 

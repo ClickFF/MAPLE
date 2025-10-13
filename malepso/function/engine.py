@@ -112,7 +112,6 @@ class engine():
                 method(str): The optimization method to be used. (Default: LBFGS)
                 extra(dict): Extra parameters to be passed to the job.
         """
-        
         dispatcher = Dispatcher()
         dispatcher(jobtype, atoms, output, method, extra)
     

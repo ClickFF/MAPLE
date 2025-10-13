@@ -38,4 +38,4 @@ def process_coordinates(file_path, output_path):
         out_file.writelines(coordinates)
 
 # 使用示例
-process_coordinates('constrain_input.out', 'constrain_input.xyz')
+process_coordinates('endo.out', 'endo.xyz')
