@@ -1,6 +1,19 @@
+import os
+
 from malepso.function.engine import engine
 
 if __name__ == '__main__':
     engine = engine()
-    engine(r'/data1/wayne/software/MaLePSO/example/ts/da.inp')
     
+    test_control = 2
+
+    software_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    if test_control == 1:
+        path = os.path.join(software_dir, 'example', 'ts', 'da.inp')
+        
+    if test_control == 2:
+        path = os.path.join(software_dir, 'example', 'ts', 'neb', 'inp1.inp')
+        
+    
+    engine(path)
