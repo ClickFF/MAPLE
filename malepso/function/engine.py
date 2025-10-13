@@ -101,7 +101,7 @@ class engine():
 
         return self.calulator
     
-    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='RFO', extra:dict=None) -> None:
+    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='LBFGS', extra:dict=None) -> None:
         """
             This function dispatches the job type.
 
@@ -112,7 +112,6 @@ class engine():
                 method(str): The optimization method to be used. (Default: LBFGS)
                 extra(dict): Extra parameters to be passed to the job.
         """
-        
         dispatcher = Dispatcher()
         dispatcher(jobtype, atoms, output, method, extra)
     

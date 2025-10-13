@@ -4,7 +4,7 @@ from ase import Atoms
 from ..jobABC import JobABC
 
 class Optmization(JobABC):
-    def __init__(self, output:str, atoms:Atoms, method:str='LBFGS',criteria:int=1):
+    def __init__(self, output:str, atoms:Atoms, method:str='LBFGS',criteria:int=2):
         super().__init__(output)
         self.atoms = atoms
         self.method = method
@@ -15,6 +15,11 @@ class Optmization(JobABC):
             self.atoms.f_rms_th=0.0003*27.211386024367243
             self.atoms.dp_max_th=0.0018   
             self.atoms.dp_rms_th=0.0012
+        elif criteria == 2: # loose criteria
+            self.atoms.f_max_th=0.0025*27.211386024367243
+            self.atoms.f_rms_th=0.0016*27.211386024367243
+            self.atoms.dp_max_th=0.01   
+            self.atoms.dp_rms_th=0.006667
 
     def run(self):
         if self.method == 'LBFGS':

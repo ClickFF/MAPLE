@@ -21,10 +21,10 @@ class Scan(JobABC):
 			self.atoms.dp_max_th=0.0018   
 			self.atoms.dp_rms_th=0.0012
 		elif criteria == 2: # loose criteria
-			self.atoms.f_max_th=0.01*27.211386024367243
-			self.atoms.f_rms_th=0.006*27.211386024367243
-			self.atoms.dp_max_th=0.04   
-			self.atoms.dp_rms_th=0.025
+			self.atoms.f_max_th=0.0025*27.211386024367243
+			self.atoms.f_rms_th=0.0016*27.211386024367243
+			self.atoms.dp_max_th=0.01   
+			self.atoms.dp_rms_th=0.006667
 
 	def convert_constraints(self, original_constraints):
 		"""

@@ -42,4 +42,4 @@ def process_coordinates(file_path, output_path):
         out_file.writelines(coordinates)
 
 # 使用示例
-process_coordinates('prfo', 'prfo')
+process_coordinates('da', 'da')

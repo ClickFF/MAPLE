@@ -17,10 +17,12 @@ def RFO(atoms: Atoms, output):
 	g_au = 27.211386024367243
 	max_iter = 256  # 最大迭代次数
 	max_step_size = 0.2  # 最大步长
+	using_step_size = 0.1
 	iteration = 0  # 初始化迭代计数
 	
 	while iteration < max_iter:
 
+		energy_list = []
 		iteration += 1
 		iter = f"Iteration: {iteration}"
 		info_message = ['\n' + '-' * 70 + '\n',f'{iter.center(70)}\n\n']
@@ -57,8 +59,8 @@ def RFO(atoms: Atoms, output):
 		x = -np.linalg.solve(shifted_hessian_np, gradient_np)
 		x = x.flatten()
 		# Step 4: 检查步长大小是否超过允许范围，必要时进行缩放
-		if np.linalg.norm(x) > max_step_size:
-			x = scale_down(x, max_step_size)
+		if np.linalg.norm(x) > using_step_size:
+			x = scale_down(x, using_step_size)
 		
 		#detalE = predict_energy_change(x, lambda_val, eigvals, gradient)
 		#deltaE = detalE/g_au
@@ -71,13 +73,20 @@ def RFO(atoms: Atoms, output):
 		X_new = X.flatten() + x
 		atoms.set_positions(X_new.reshape(-1, 3))
 
+
 		# Convergence criteria:
 		energy = atoms.get_potential_energy(force_consistent=True)
+		energy_list.append(energy)
 		force = atoms.get_forces()  
 		atoms.max_dp = abs(x).max()
 		atoms.rms_dp = np.sqrt((x**2).sum()/x.size*3)
 		atoms.max_f = abs(force).max()
 		atoms.rms_f = np.sqrt((force**2).sum()/x.size*3)
+
+		if iteration%10 == 0:
+			if check_energy_trend(energy_list):
+				using_step_size *= 0.8
+
 
 		# Log the information:
 		info_message.append(f'\n{"Coordinates".center(70)}\n')
@@ -92,7 +101,7 @@ def RFO(atoms: Atoms, output):
 		
 		
 		info_message.append(f"\n\nEnergy:                {energy/g_au:>12.6f} Convergence criteria  Is converged \n")
-
+		
 		if atoms.max_f > atoms.f_max_th:
 			info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")
 		else:
@@ -191,6 +200,29 @@ def predict_energy_change(x, lambda0, eigvals, gradient):
 	sum = 0
 	for i in range(len(eigvals)):
 		sum += (g[i]**2) * (lambda0 - eigvals[i]/2)/((lambda0-eigvals[i])**2)
-	return z_inv * sum
-
+	results = z_inv * sum
+	deltaE = 0
+	for i in range(len(results)):
+		deltaE += results[i]
+	return deltaE
 	
+def check_energy_trend(energy_list):
+    if len(energy_list) < 10:
+        return None  # 数据不足，无法判断
+
+    last_10_energies = energy_list[-10:]
+
+    # 计算相邻能量差
+    diffs = [last_10_energies[i+1] - last_10_energies[i] for i in range(9)]
+
+    # 检查总体趋势是否下降
+    if all(d <= 0 for d in diffs):
+        return False  # 总体趋势下降
+
+    # 检查是否出现震荡
+    sign_changes = sum(1 for i in range(len(diffs)-1) if diffs[i]*diffs[i+1] < 0)
+    if sign_changes > 0:
+        return True  # 出现震荡
+
+    # 如果既不完全下降也没有震荡，默认返回False
+    return False
