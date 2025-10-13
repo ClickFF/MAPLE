@@ -28,3 +28,9 @@ class Optmization(JobABC):
         elif self.method == 'RFO':
             from .algorithm import RFO
             RFO(self.atoms, output=self.output)
+        elif self.method == 'DIIS':
+            from .algorithm import DIIS
+            DIIS(self.atoms, output=self.output)
+        elif self.method == 'SD':
+            from .algorithm import SD
+            SD(self.atoms, output=self.output)
