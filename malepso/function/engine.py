@@ -56,15 +56,14 @@ class engine():
         self._input_reader(input_file_name, output_file_name)
         self._mlp_initiator(self.model, self.gpuid)
 
-        # Set calculator to atoms
-        if self.atoms is Atoms:
+        if isinstance(self.atoms, Atoms):       
             self.atoms.set_calculator(self.calulator)
-        elif isinstance(self.atoms, list):
+        elif isinstance(self.atoms, list):     
             for atom in self.atoms:
                 atom.set_calculator(self.calulator)
-
+                
         # Self.atoms printing
-        self._jobtype_dispatcher(self.jobtype, self.atoms, self.output, extra=self.extra)
+        self._jobtype_dispatcher(self.commandcontrol, self.jobtype, self.atoms, self.output, extra=self.extra)
 
     def _input_reader(self, input_file_name:str, output_file_name:str=None) -> Atoms:
         """
@@ -87,8 +86,10 @@ class engine():
 
         self.extra = {}
 
-        if self.jobtype == 3:
+        if self.jobtype == 'scan':
             self.extra = {'scan': reader.scan_constraints}
+        
+        self.commandcontrol = reader.command_control
 
     
     def _mlp_initiator(self, model:int, gpuid:int) -> torchani.ase.Calculator:

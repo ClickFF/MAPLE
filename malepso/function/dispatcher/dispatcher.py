@@ -8,10 +8,17 @@ class Dispatcher():
     def __init__(self):
         pass
 
-    def __call__(self, jobtype: int, atoms: Union[Atoms, List[Atoms]], output:str, method: str='LBFGS', extra:dict=None) -> None:
+    def __call__(self, commandcontrol, jobtype: int, atoms: Union[Atoms, List[Atoms]], output:str, method: str='LBFGS', extra:dict=None, ) -> None:
 
-        # jobtype: 1 for optimization, 2 for single point energy, 3 for scan,
-        #            4 for frequency, 5 for transition state search
+        """
+        Dispatches the job based on the job type.
+        Args:
+            jobtype: The type of job to be performed.
+            atoms: The ASE Atoms object, it can also be a list of Atoms objects.
+            output: The path to the output file.
+            method: The optimization method to be used. (Default: LBFGS)
+            extra: Extra parameters to be passed to the job.
+        """
 
         self.output = output
         print(f'Job type: {jobtype}')
@@ -23,6 +30,7 @@ class Dispatcher():
 
             opt = Optmization(output=output, atoms=atoms, method=method)
             opt.run()
+            
         elif jobtype == 'sp':
             from .sp import SinglePoint
 
@@ -54,13 +62,21 @@ class Dispatcher():
 
             freq = Frequency(output=output, atoms=atoms)
             freq.run()
+            
         elif jobtype == 'ts':
             from .ts import TransitionState
-
             if isinstance(atoms, list):
-                raise NotImplementedError('For transition state search job, only one Atoms object is allowed.')
-            ts = TransitionState(output=output, atoms=atoms)
+                if commandcontrol.params.get('method') in ['neb', 'string']:
+                    ts = TransitionState(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
+                    ts.run()
+                    return
+                elif commandcontrol.params.get('method') in ['prfo', 'newton']:
+                    raise NotImplementedError('For transition state search job, only one Atoms object is allowed for PRFO or Newton method.')
+
+            ts = TransitionState(output=output, atoms=atoms, params=commandcontrol.params)
             ts.run()
+            
+            
         else:
             try:
                 raise NotImplementedError('Job type not implemented')
