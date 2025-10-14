@@ -21,8 +21,8 @@ class CommandControl:
         "d4": False,
         "sp": {},
         "opt": {"method": "lbfgs", "maxiter": 200, "convergence": 1e-5},
-        "ts": {"method": "dimer", "maxiter": 200, "neb_images": 7},
-        "scan": {"start": None, "end": None, "step": 0.1, "method": "lbfgs"},
+        "ts": {"method": "prfo", "maxiter": 200, "neb_images": 7, "level": "medium"},
+        "scan": {"method": "lbfgs"},
         "freq": {"method": "mw", "temperature": 298.15},
     }
 

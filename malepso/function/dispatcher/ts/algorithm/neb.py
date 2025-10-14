@@ -482,7 +482,7 @@ class NEB(JobABC):
         P = to_numpy_f64(self.atoms_P.get_positions())
         P_aligned, rmsd, _, _ = kabsch_align(R, P)
         self.atoms_P.set_positions(P_aligned)
-        log_info([f"Alignment done. RMSD: {rmsd:.6f}\n"], self.output)
+        log_info([f"Alignment done. RMSD: {rmsd:.6f}\n"], self.output, ' (Angstrom)')
 
         # 1) Build linear path
         n_img = self.params.n_images

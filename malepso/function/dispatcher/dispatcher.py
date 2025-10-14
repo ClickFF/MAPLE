@@ -21,7 +21,8 @@ class Dispatcher():
         """
 
         self.output = output
-        print(f'Job type: {jobtype}')
+        self.set_throshould(atoms)
+        
         if jobtype == 'opt':
             from .optimization import Optmization
 
@@ -82,6 +83,46 @@ class Dispatcher():
                 raise NotImplementedError('Job type not implemented')
             except NotImplementedError as e:
                 self.log_error(str(e))
+                
+    def set_throshould(self, atoms) -> None:
+        """
+        Sets the convergence throshould for the atoms object.
+
+        Args:
+            atoms: The ASE Atoms object.
+        """
+        
+        if self.commandcontrol.params.get('level') == 'high':
+            self.commandcontrol.params['f_max_th'] = 0.00015*27.211386024367243
+            self.commandcontrol.params['f_rms_th'] = 0.0001*27.211386024367243
+            self.commandcontrol.params['dp_max_th'] = 0.0006
+            self.commandcontrol.params['dp_rms_th'] = 0.0004
+            
+        # default level is medium
+        elif self.commandcontrol.params.get('level') == 'medium':
+            self.commandcontrol.params['f_max_th'] = 0.00045*27.211386024367243
+            self.commandcontrol.params['f_rms_th'] = 0.0003*27.211386024367243
+            self.commandcontrol.params['dp_max_th'] = 0.0018   
+            self.commandcontrol.params['dp_rms_th'] = 0.0012
+        
+        # low level
+        elif self.commandcontrol.params.get('level') == 'low':
+            self.commandcontrol.params['f_max_th'] = 0.00075*27.211386024367243
+            self.commandcontrol.params['f_rms_th'] = 0.0005*27.211386024367243
+            self.commandcontrol.params['dp_max_th'] = 0.003   
+            self.commandcontrol.params['dp_rms_th'] = 0.002
+
+        if isinstance(atoms, list):
+            for atom in atoms:
+                atom.f_max_th=self.commandcontrol.params['f_max_th']
+                atom.f_rms_th=self.commandcontrol.params['f_rms_th']
+                atom.dp_max_th=self.commandcontrol.params['dp_max_th']   
+                atom.dp_rms_th=self.commandcontrol.params['dp_rms_th']
+        else:
+            atoms.f_max_th=self.commandcontrol.params['f_max_th']
+            atoms.f_rms_th=self.commandcontrol.params['f_rms_th']
+            atoms.dp_max_th=self.commandcontrol.params['dp_max_th']   
+            atoms.dp_rms_th=self.commandcontrol.params['dp_rms_th']
 
     def log_error(self, error_message: str) -> None:
         """
