@@ -111,11 +111,12 @@ class engine():
 
         return self.calulator
     
-    def _jobtype_dispatcher(self, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, method:str='LBFGS', extra:dict=None) -> None:
+    def _jobtype_dispatcher(self, commandcontrol, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, extra:dict=None) -> None:
         """
             This function dispatches the job type.
 
             Args:
+                commandcontrol: CommandControl object
                 jobtype(int): The type of job to be performed.
                 atoms(Atoms): The ASE Atoms object, it can also be a list of Atoms objects.
                 output(str): The path to the output file.
@@ -123,7 +124,7 @@ class engine():
                 extra(dict): Extra parameters to be passed to the job.
         """
         dispatcher = Dispatcher()
-        dispatcher(jobtype, atoms, output, method, extra)
+        dispatcher(commandcontrol, jobtype, atoms, output, extra)
     
 
 

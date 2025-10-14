@@ -23,7 +23,7 @@ class CommandControl:
         "opt": {"method": "lbfgs", "maxiter": 200, "convergence": 1e-5},
         "ts": {"method": "dimer", "maxiter": 200, "neb_images": 7},
         "scan": {"start": None, "end": None, "step": 0.1, "method": "lbfgs"},
-        "freq": {"method": "mw"},
+        "freq": {"method": "mw", "temperature": 298.15},
     }
 
     IMPLEMENTATION_MAP = {
