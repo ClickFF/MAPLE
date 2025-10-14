@@ -14,18 +14,6 @@ class TransitionState(JobABC):
         self.params = params
         self.method=method
 
-        if isinstance(atoms, list):
-            for atom in self.atoms:
-                atom.f_max_th=0.00045*27.211386024367243
-                atom.f_rms_th=0.0003*27.211386024367243
-                atom.dp_max_th=0.0018   
-                atom.dp_rms_th=0.0012
-        else:
-            self.atoms.f_max_th=0.00045*27.211386024367243
-            self.atoms.f_rms_th=0.0003*27.211386024367243
-            self.atoms.dp_max_th=0.0018   
-            self.atoms.dp_rms_th=0.0012
-
     def run(self):
         #from .algorithm import Newton
         #Newton(self.atoms, output=self.output)

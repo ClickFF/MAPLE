@@ -17,7 +17,7 @@ class CommandControl:
 
     DEFAULTS = {
         "model": None,
-        "gpuid": None,
+        "device": None,
         "d4": False,
         "sp": {},
         "opt": {"method": "lbfgs", "maxiter": 200, "convergence": 1e-5},

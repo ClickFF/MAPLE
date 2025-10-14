@@ -4,6 +4,7 @@ from typing import Any, List, Union
 
 from ase import Atoms
 import numpy as np
+import torch
 
 from .filereader import XYZReader
 from .command_control import CommandControl
@@ -13,7 +14,7 @@ class InputReader():
         self.input:str = None
         self.output:str = None
         self.error:bool = False
-        self.gpuid:int = None
+        self.device:torch.device = None
 
         self.model:int = None
         # 1: ANI-2x
@@ -218,7 +219,26 @@ class InputReader():
 
             # Assign key parameters
             self.model = params.get("model").lower()
-            self.gpuid = params.get("gpuid")
+
+            dev_str: str = params.get("device", "cpu").lower()
+
+            # Automatically handle GPU/CPU selection
+            if dev_str.startswith("gpu") or dev_str.startswith("cuda"):
+                idx = ''.join([c for c in dev_str if c.isdigit()])
+                cuda_idx = idx if idx != '' else '0'
+                if torch.cuda.is_available():
+                    self.device = torch.device(f'cuda:{cuda_idx}')
+                else:
+                    self.log_info("\nWARNING: CUDA is not available. Falling back to CPU.\n")
+                    self.device = torch.device('cpu')
+            else:
+                try:
+                    self.device = torch.device(dev_str)
+                except:
+                    self.log_info("\nWARNING: Unrecognized device. Falling back to CPU.\n")
+                    self.device = torch.device('cpu')
+
+            
             self.d4 = params.get("d4", False)
             self.jobtype = params.get("task")  # ← now replaces jobtype
 

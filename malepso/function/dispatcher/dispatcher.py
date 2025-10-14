@@ -21,6 +21,7 @@ class Dispatcher():
         """
 
         self.output = output
+        self.commandcontrol = commandcontrol
         self.set_throshould(atoms)
         
         if jobtype == 'opt':
@@ -93,22 +94,22 @@ class Dispatcher():
         """
         
         if self.commandcontrol.params.get('level') == 'high':
-            self.commandcontrol.params['f_max_th'] = 0.00015*27.211386024367243
-            self.commandcontrol.params['f_rms_th'] = 0.0001*27.211386024367243
+            self.commandcontrol.params['f_max_th'] = 0.00015
+            self.commandcontrol.params['f_rms_th'] = 0.0001
             self.commandcontrol.params['dp_max_th'] = 0.0006
             self.commandcontrol.params['dp_rms_th'] = 0.0004
             
         # default level is medium
         elif self.commandcontrol.params.get('level') == 'medium':
-            self.commandcontrol.params['f_max_th'] = 0.00045*27.211386024367243
-            self.commandcontrol.params['f_rms_th'] = 0.0003*27.211386024367243
+            self.commandcontrol.params['f_max_th'] = 0.00045
+            self.commandcontrol.params['f_rms_th'] = 0.0003
             self.commandcontrol.params['dp_max_th'] = 0.0018   
             self.commandcontrol.params['dp_rms_th'] = 0.0012
         
         # low level
         elif self.commandcontrol.params.get('level') == 'low':
-            self.commandcontrol.params['f_max_th'] = 0.00075*27.211386024367243
-            self.commandcontrol.params['f_rms_th'] = 0.0005*27.211386024367243
+            self.commandcontrol.params['f_max_th'] = 0.00075
+            self.commandcontrol.params['f_rms_th'] = 0.0005
             self.commandcontrol.params['dp_max_th'] = 0.003   
             self.commandcontrol.params['dp_rms_th'] = 0.002
 

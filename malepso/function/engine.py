@@ -14,13 +14,12 @@ This tutorial illustrates how to manually load model from `NeuroChem files`_.
 # To begin with, let's first import the modules we will use:
 
 from typing import Union, List
-import numpy as np
 
 from ase import Atoms 
-import torchani
+import ase
+import torch
 
 from ..function.read import InputReader
-from ..function.calculator import Calculator
 from ..function.dispatcher import Dispatcher
 
 class engine():
@@ -54,7 +53,7 @@ class engine():
                 output_file_name: The path to the output file. (Default: None)
         """
         self._input_reader(input_file_name, output_file_name)
-        self._mlp_initiator(self.model, self.gpuid)
+        self._mlp_initiator(self.model, self.device)
 
         if isinstance(self.atoms, Atoms):       
             self.atoms.set_calculator(self.calulator)
@@ -79,8 +78,9 @@ class engine():
         reader = InputReader()
         self.atoms = reader(input_file_name, output_file_name)
         self.output = reader.output
-        self.gpuid = reader.gpuid
+        self.device = reader.device
         self.model = reader.model
+        print(self.model)
         self.jobtype = reader.jobtype
         self.d4 = reader.d4
 
@@ -91,25 +91,20 @@ class engine():
         
         self.commandcontrol = reader.command_control
 
-    
-    def _mlp_initiator(self, model:int, gpuid:int) -> torchani.ase.Calculator:
+
+    def _mlp_initiator(self, model:str, device: torch.device):
         """
             This function initializes the model.
 
             Args:
-                model: int
-                    The model to be used for the calculation.
-                    1: ANI-2x
-                    2: ANI-1x
-                    3: ANI-1ccx
-                    4: ANI-1xnr
-                gpuid: int
-                    The GPU ID to be used for calculation. If None, use CPU. Default is None.
+                model: The model to be used.
+                device: torch.device
+                    The device to run the model on.
         """
-        calculator = Calculator(model, gpuid, self.output,d4=self.d4)
-        self.calulator = calculator.construct_calculator()
-
-        return self.calulator
+        
+        from .calculator.ani import ANICalculator
+        calculator = ANICalculator(device, model, self.output, d4=self.d4)
+        self.calulator = calculator
     
     def _jobtype_dispatcher(self, commandcontrol, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, extra:dict=None) -> None:
         """

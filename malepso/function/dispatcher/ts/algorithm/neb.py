@@ -214,8 +214,8 @@ class NEBParams:
     step_min: float = 5e-4
     step_max: float = 1.0
     # ORCA-like convergence on projected forces
-    f_max_th: float = 1.0e-2             # max(|Fp|) threshold
-    f_rms_th: float = 5.0e-3             # RMS(Fp) threshold
+    neb_f_max_th: float = 1.0e-3             # max(|Fp|) threshold
+    neb_f_rms_th: float = 5.0e-4             # RMS(Fp) threshold
     initial_opt: bool = False               # do initial relaxation of endpoints
 
 def improved_tangent(Rm1, R, Rp1, Em1, E, Ep1):
@@ -482,7 +482,7 @@ class NEB(JobABC):
         P = to_numpy_f64(self.atoms_P.get_positions())
         P_aligned, rmsd, _, _ = kabsch_align(R, P)
         self.atoms_P.set_positions(P_aligned)
-        log_info([f"Alignment done. RMSD: {rmsd:.6f}\n"], self.output, ' (Angstrom)')
+        log_info([f"Alignment done. RMSD: {rmsd:.6f}\n"], f'{self.output} (Angstrom)')
 
         # 1) Build linear path
         n_img = self.params.n_images
@@ -523,10 +523,10 @@ class NEB(JobABC):
         log_info([
             "\nStarting NEB iterations:\n",
             "Optim.  Iteration  HEI  E(HEI)-E(0)  max(|Fp|)   RMS(Fp)\n",
-            f"Convergence thresholds         {self.params.f_max_th: .6f}   {self.params.f_rms_th: .6f}\n"
+            f"Convergence thresholds         {self.params.neb_f_max_th: .6f}   {self.params.neb_f_rms_th: .6f}\n"
         ], self.output)
 
-        while iteration < self.params.max_iter and not driver.should_stop(g, self.params.f_max_th, self.params.f_rms_th):
+        while iteration < self.params.max_iter and not driver.should_stop(g, self.params.neb_f_max_th, self.params.neb_f_rms_th):
             p = driver.two_loop(g)
             p = driver.step_limit(p)
             x_new = x + p
