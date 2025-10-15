@@ -34,7 +34,17 @@ class TransitionState(JobABC):
                 paras=self.params
             )
             neb.run()
-            
+        elif self.method == 'string':
+            if not isinstance(self.atoms, list):
+                raise ValueError('For String method, you should provide at least two structures (initial and final states).')
+            from .algorithm import String
+            string = String(
+                output=self.output,
+                atoms_R=self.atoms[0],
+                atoms_P=self.atoms[1],
+                paras=self.params
+            )
+            string.run()
         else:
             raise ValueError(f'Method {self.method} not recognized. Available methods are: newton, prfo, neb.')
 
