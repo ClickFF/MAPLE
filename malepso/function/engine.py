@@ -1,18 +1,3 @@
-#!/usr/bin/env python
-"""
-Construct Model From NeuroChem Files
-====================================
-
-This tutorial illustrates how to manually load model from `NeuroChem files`_.
-
-.. _NeuroChem files:
-    https://github.com/isayev/ASE_ANI/tree/master/ani_models
-
-"""
-
-###############################################################################
-# To begin with, let's first import the modules we will use:
-
 from typing import Union, List
 
 from ase import Atoms 
@@ -52,6 +37,7 @@ class engine():
                 input_file_name: The path to the input file.
                 output_file_name: The path to the output file. (Default: None)
         """
+        
         self._input_reader(input_file_name, output_file_name)
         self._mlp_initiator(self.model, self.device)
 
@@ -80,7 +66,6 @@ class engine():
         self.output = reader.output
         self.device = reader.device
         self.model = reader.model
-        print(self.model)
         self.jobtype = reader.jobtype
         self.d4 = reader.d4
 

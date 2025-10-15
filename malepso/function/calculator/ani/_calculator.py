@@ -1,3 +1,11 @@
+#########################################################################
+# This module is currently decrepted and will be removed in future versions. #
+# Please use malepso.function.calculator.ani instead.                     #
+#########################################################################
+
+
+
+
 import os
 import torch
 import torchani
