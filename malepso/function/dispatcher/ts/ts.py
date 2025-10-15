@@ -8,15 +8,13 @@ from ..jobABC import JobABC
 
 class TransitionState(JobABC):
 
-    def __init__(self, output: str, atoms: Atoms, params: dict, method:str='newton',criteria:str='default'):
+    def __init__(self, output: str, atoms: Atoms, params: dict,criteria:str='default'):
         super().__init__(output)
         self.atoms = atoms
         self.params = params
-        self.method=method
+        self.method=self.params.get('method')
 
     def run(self):
-        #from .algorithm import Newton
-        #Newton(self.atoms, output=self.output)
         if self.method == 'newton':
             from .algorithm import Newton
             Newton(self.atoms, output=self.output)
@@ -45,6 +43,14 @@ class TransitionState(JobABC):
                 paras=self.params
             )
             string.run()
+        elif self.method == 'dimer':
+            from .algorithm import Dimer
+            dimer = Dimer(
+                output=self.output,
+                atoms_init=self.atoms,
+                paras=self.params
+            )
+            dimer.run()
         else:
             raise ValueError(f'Method {self.method} not recognized. Available methods are: newton, prfo, neb.')
 

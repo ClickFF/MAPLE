@@ -29,7 +29,7 @@ class CommandControl:
     IMPLEMENTATION_MAP = {
         "opt": {"lbfgs", "rfo", "cg", ""},
         "scan": {"lbfgs", "cg"},
-        "ts": {"prfo", "string", "neb"},
+        "ts": {"prfo", "string", "neb", "dimer"},
         "freq": {"mw", "nonmw"},
         "sp": set()
     }
