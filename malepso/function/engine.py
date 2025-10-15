@@ -13,6 +13,7 @@ This tutorial illustrates how to manually load model from `NeuroChem files`_.
 ###############################################################################
 # To begin with, let's first import the modules we will use:
 
+from typing import Union, List
 import numpy as np
 
 from ase import Atoms 
@@ -54,7 +55,15 @@ class engine():
         """
         self._input_reader(input_file_name, output_file_name)
         self._mlp_initiator(self.model, self.gpuid)
-        self.atoms.set_calculator(self.calulator)
+
+        # Set calculator to atoms
+        if self.atoms is Atoms:
+            self.atoms.set_calculator(self.calulator)
+        elif isinstance(self.atoms, list):
+            for atom in self.atoms:
+                atom.set_calculator(self.calulator)
+
+        # Self.atoms printing
         self._jobtype_dispatcher(self.jobtype, self.atoms, self.output, extra=self.extra)
 
     def _input_reader(self, input_file_name:str, output_file_name:str=None) -> Atoms:
@@ -101,13 +110,13 @@ class engine():
 
         return self.calulator
     
-    def _jobtype_dispatcher(self, jobtype:int, atoms:Atoms, output:str, method:str='LBFGS', extra:dict=None) -> None:
+    def _jobtype_dispatcher(self, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, method:str='LBFGS', extra:dict=None) -> None:
         """
             This function dispatches the job type.
 
             Args:
                 jobtype(int): The type of job to be performed.
-                atoms(Atoms): The ASE Atoms object to be optimized.
+                atoms(Atoms): The ASE Atoms object, it can also be a list of Atoms objects.
                 output(str): The path to the output file.
                 method(str): The optimization method to be used. (Default: LBFGS)
                 extra(dict): Extra parameters to be passed to the job.

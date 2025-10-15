@@ -19,17 +19,15 @@ class Calculator():
             output: str, output file path. Default is None.
         """
         self.output = output
-        model_dict = {1: 'ANI-2x', 2: 'ANI-1x', 3: 'ANI-1ccx', 4: 'ANI-1xnr'}
-
         info_message = [f"\nLoading the Machine Learning Potential Model...\n"]
         scripts_path = os.path.dirname(os.path.realpath(__file__))
-        if model == 1:
+        if model == 'ani-2x':
             model_path = os.path.join(scripts_path, 'model/ani-2x_8x')
-        elif model == 2:
+        elif model == 'ani-1x':
             model_path = os.path.join(scripts_path, 'model/ani-1x_8x')
-        elif model == 3:
+        elif model == 'ani-1ccx':
             model_path = os.path.join(scripts_path, 'model/ani-1ccx_8x')
-        elif model == 4:
+        elif model == 'ani-1xnr':
             model_path = os.path.join(scripts_path, 'model/ani-1xnr_8x')
         
         try:
@@ -40,7 +38,7 @@ class Calculator():
             self.log_error(str(e))
             raise
 
-        info_message.append(f'Loading ANI model ({model_dict.get(model)}) successfully.\n')
+        info_message.append(f'Loading ANI model ({model}) successfully.\n')
 
         self.model_path = model_path
         self.gpuid = gpuid
