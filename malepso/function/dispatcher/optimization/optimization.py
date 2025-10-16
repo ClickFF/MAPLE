@@ -10,27 +10,13 @@ class Optmization(JobABC):
         self.method = method
         self.output = output
 
-        if criteria == 1:
-            self.atoms.f_max_th=0.00045*27.211386024367243
-            self.atoms.f_rms_th=0.0003*27.211386024367243
-            self.atoms.dp_max_th=0.0018   
-            self.atoms.dp_rms_th=0.0012
-        elif criteria == 2: # loose criteria
-            self.atoms.f_max_th=0.0025*27.211386024367243
-            self.atoms.f_rms_th=0.0016*27.211386024367243
-            self.atoms.dp_max_th=0.01   
-            self.atoms.dp_rms_th=0.006667
-
     def run(self):
-        if self.method == 'LBFGS':
+        if self.method == 'lbfgs':
             from .algorithm import LBFGS
             LBFGS(self.atoms, output=self.output)
-        elif self.method == 'RFO':
+        elif self.method == 'rfo':
             from .algorithm import RFO
             RFO(self.atoms, output=self.output)
-        elif self.method == 'DIIS':
-            from .algorithm import DIIS
-            DIIS(self.atoms, output=self.output)
-        elif self.method == 'SD':
+        elif self.method == 'sd':
             from .algorithm import SD
             SD(self.atoms, output=self.output)

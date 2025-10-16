@@ -5,6 +5,8 @@ from typing import Dict, Union, Sequence, Optional
 from ase.calculators.calculator import all_changes
 from ..calculator_base import CalcABC
 
+EV2HARTREE = 1.0 / 27.211386245988
+
 # ------------------------ Basic helpers ------------------------
 
 _SYMBOL2Z = {
@@ -153,6 +155,7 @@ class MACECalculator(CalcABC):
         )
 
         energy = total_energy_local.sum()
+        energy = energy * EV2HARTREE  # Convert eV to Hartree
         self.results['energy'] = energy.item()
         self.results['free_energy'] = energy.item()
 
@@ -215,6 +218,7 @@ class MACECalculator(CalcABC):
             compute_virials=False
         )
         energy = total_energy_local.sum()
+        energy = energy * EV2HARTREE
 
         hessian = self.compute_hessian(positions, energy)
         return hessian.detach().cpu().numpy()

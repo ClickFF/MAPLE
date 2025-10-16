@@ -1,198 +1,163 @@
 import numpy as np
-
 from ase import Atoms
-
 from .logger import *
-from .DIIS import OptimizationStorage
-from .DIIS import DIIS
+from .DIIS import OptimizationStorage, DIIS
 
-###############################
-g_au=27.211386024367243
-
-def LBFGS(atoms:Atoms, output:str, use_line_search=False, memory=100, curvature=70.0,
-	maxstep=0.2, maxiteration=128,) -> int:
-	"""
-	This function is used to perform the L-BFGS optimization.
-
-	Args:
-		mol: The ASE Atoms object to be optimized.
-		use_line_search: Whether to use line search or not. (Default: False)
-		memory: The number of previous steps to remember. (Default: 100)
-		curvature: The initial approximation of the inverse Hessian. (Default: 70.0)
-		maxstep: The maximum step size. (Default: 0.2)
-		maxiteration: The maximum number of iterations. (Default: 10)
-	
-	Returns:
-	
-	"""
-	info_message = []
-
-	if maxstep > 1.0:
-			info_message.append(f'You are using a much too large value for \
-			the maximum step size: {maxstep} Angstrom')
-
-	
-	"""
-	Variables:
-	H0: Initial approximation of inverse Hessian 1./70. is to emulate the behaviour of BFGS.
-	alph: The step size.
-	p: The search direction of LBFGS.
-	iteration: The number of iterations.
-	s: The list to store r-r0.
-	y: The list to store g-g0. (g: gradient)
-	rho: The list to store 1/(r-r0)(g-g0).
-	r0: The initial positions of the atoms.
-	r: The current positions of the atoms.
-	dr: The difference between the current and the previous positions.
-	e: The potential energy of the atoms.
-	f: The forces acting on the atoms.
-	f0: The forces acting on the atoms.
-	q: The search direction of LBFGS. (q = -f)
-
-	"""
-	
-	# Initial approximation of inverse Hessian 1./70. is to emulate the behaviour of BFGS. 
-
-	H0 = 1. / curvature
-	alph=1.0
-	p = None  
-	iteration = 0
-	s = []
-	y = []       
-	rho = []
-	r0 = atoms.get_positions()
-	r=r0*1.0
-	dr = atoms.get_positions()-r0
-	e  = atoms.get_potential_energy(force_consistent=True)
-	f  = atoms.get_forces()
-	
-	diis_storage = OptimizationStorage()
-	diis_counter = 0
+g_au = 27.211386024367243
 
 
-	f0 = f*1.0
-	q  = -f*1.0
+def LBFGS(
+    atoms: Atoms,
+    output: str,
+    use_line_search: bool = False,
+    memory: int = 5,              # ✅ 改成默认 5，与 Driver 思路一致
+    curvature: float = 70.0,
+    maxstep: float = 0.2,
+    maxiteration: int = 128,
+    use_diis: bool = True,        # ✅ DIIS 开关
+) -> int:
+    """
+    Textbook-style L-BFGS optimizer (two-loop recursion, dynamic H0),
+    keeping original ASE interface, DIIS logic, and logging output.
+    """
 
-	convergence = False
-	a = np.empty((memory,), dtype=np.float64)
+    S, Y, rhos = [], [], []   # ✅ 标准 L-BFGS 历史
+    diis_storage = OptimizationStorage()
+    diis_counter = 0
 
+    r = atoms.get_positions()
+    e = atoms.get_potential_energy(force_consistent=True)
+    f = atoms.get_forces()
 
+    iteration = 0
+    convergence = False
 
-	while not convergence and iteration < maxiteration:
-		# Store for DIIS
-		diis_storage.diis_x_vectors.append(atoms.get_positions().copy())
-		diis_storage.diis_error_vectors.append(f.copy())
-		diis_storage.iteration = iteration
-		diis_counter += 1
-		
-		# Call DIIS every 10 iterations
-		if diis_counter >= 10:
-			DIIS(atoms, output, max_step_size=maxstep, maxiterations=maxiteration, storage=diis_storage)
-			diis_counter = 0  # Reset counter to continue LBFGS
-			diis_storage.reset() 
-		
-		if iteration > 0:
-			s0 = alph*dr
-			s.append(s0)
-			y0 = f0 - f
-			y.append(y0)
+    while not convergence and iteration < maxiteration:
+        # ================================
+        # ✅ DIIS 加速（可选，不改变主算法）
+        # ================================
+        if use_diis:
+            diis_storage.diis_x_vectors.append(r.copy())
+            diis_storage.diis_error_vectors.append(f.copy())
+            diis_storage.iteration = iteration
+            diis_counter += 1
 
-			rho0 = 1.0 / (y0*s0).sum()
-			rho.append(rho0)
+            if diis_counter >= 10:
+                DIIS(atoms, output, max_step_size=maxstep, maxiterations=maxiteration, storage=diis_storage)
+                diis_counter = 0
+                diis_storage.reset()
 
-		if iteration > memory:
-			s.pop(0)
-			y.pop(0)
-			rho.pop(0)
-		   
-		loopmax = np.min([memory, iteration])
+                # ⚠️ 重要：DIIS 改变了坐标和力场，重取当前位置/力
+                r = atoms.get_positions()
+                f = atoms.get_forces()
 
-		# LBFGS algorithm:
-		q=-f*1.0
-	   		
-		for i in range(loopmax - 1, -1, -1):
-			a[i] = rho[i] * (s[i]* q).sum()
-			q -= a[i] * y[i]
-		
-		z = H0 * q
+                # 👉 可选策略：清空历史，避免方向污染
+                # S.clear(); Y.clear(); rhos.clear()
 
-		for i in range(loopmax):
-			b = rho[i] * (y[i]*z).sum()
-			z += s[i] * (a[i] - b)
-		
-		p = -1.0*z
-		dr=p*1.0
-		longest_step =np.max((dr**2).sum(1)**0.5)
-		if use_line_search==True:
-			raise NotImplementedError('Line search not implemented')
-		   
-		elif longest_step >= maxstep:
-			dr *= maxstep / longest_step	 		
-		
-		r0 = r*1.0
-		e0 = e*1.0
-		f0 = f*1.0
-		iteration += 1
-		atoms.set_positions(r0+alph*dr) 
-		##save the atoms/define flag set to falso at the beginning, after ten times set to true 
-		##then those ten will be led to diis, diis is run and the flag is set to false again, list is always reset 
+        # ================================
+        # ✅ 两步递推求搜索方向 (two-loop)
+        # ================================
+        grad = f.reshape(-1)  # 扁平化方便向量操作
+        q = grad.copy()
+        alpha_list = []
 
-		r = atoms.get_positions()
-		f = atoms.get_forces()
-		e = atoms.get_potential_energy(force_consistent=True)
+        for s, y, rho in reversed(list(zip(S, Y, rhos))):
+            a = rho * np.dot(s, q)
+            alpha_list.append(a)
+            q -= a * y
 
-		# Convergence criteria:               
-		atoms.max_dp = alph * abs(dr).max()
-		atoms.rms_dp = alph *np.sqrt((dr**2).sum()/dr.size*3)
-		atoms.max_f = abs(f).max()
-		atoms.rms_f = np.sqrt((f**2).sum()/dr.size*3)
+        # ✅ 动态 H0 (gamma) 替代固定 1/curvature
+        if Y:
+            gamma = np.dot(Y[-1], S[-1]) / (np.dot(Y[-1], Y[-1]) + 1e-20)
+        else:
+            gamma = 1.0 / curvature
 
-		
-		# Log the information:
-		iter = f"Iteration: {iteration}"
-		info_message = ['\n' + '-' * 70 + '\n',f'{iter.center(70)}\n\n']
+        z = gamma * q
 
-		info_message.append(f'\n{"Coordinates".center(70)}\n')
-		info_message.append('-' * 70)
-		info_message.append('\n')
+        for (s, y, rho), a in zip(zip(S, Y, rhos), reversed(alpha_list)):
+            b = rho * np.dot(y, z)
+            z += s * (a - b)
 
-		for atom_index, atom in enumerate(atoms):
-			element_type = atom.symbol 
-			coord = atom.position 
+        step = -z.reshape(f.shape)  # 还原原子维度
 
-			info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
-		
-		
-		info_message.append(f"\n\nEnergy:                {e/g_au:>12.6f} Convergence criteria  Is converged \n")
+        # ================================
+        # ✅ 步长限制
+        # ================================
+        max_disp = np.max(np.abs(step))
+        if max_disp > maxstep:
+            step *= maxstep / max_disp
 
-		if atoms.max_f > atoms.f_max_th:
-			info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                No\n")
-		else:
-			info_message.append(f"Maximum Force:         {atoms.max_f/g_au:>12.6f} {atoms.f_max_th/g_au:>12.6f}                Yes\n")
+        # ================================
+        # ✅ 更新坐标 / 能量 / 力
+        # ================================
+        r_old = r.copy()
+        f_old = f.copy()
+        atoms.set_positions(r + step)
 
-		if atoms.rms_f > atoms.f_rms_th:
-			info_message.append(f"RMS Force:             {atoms.rms_f/g_au:>12.6f} {atoms.f_rms_th/g_au:>12.6f}                No\n")
-		else:
-			info_message.append(f"RMS Force:             {atoms.rms_f/g_au:>12.6f} {atoms.f_rms_th/g_au:>12.6f}                Yes\n")
+        r = atoms.get_positions()
+        f = atoms.get_forces()
+        e = atoms.get_potential_energy(force_consistent=True)
 
-		if atoms.max_dp > atoms.dp_max_th:
-			info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                No\n")
-		else:
-			info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                Yes\n")
+        s_vec = (r - r_old).reshape(-1)
+        y_vec = (f - f_old).reshape(-1)
+        rho_val = 1.0 / (np.dot(y_vec, s_vec) + 1e-20)
 
-		if atoms.rms_dp > atoms.dp_rms_th:
-			info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                No\n")
-		else:
-			info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                Yes\n")
+        if np.isfinite(rho_val):  # 避免除 0
+            S.append(s_vec.copy()); Y.append(y_vec.copy()); rhos.append(rho_val)
+        if len(S) > memory:
+            S.pop(0); Y.pop(0); rhos.pop(0)
 
-		log_info(info_message,output)
+        iteration += 1
 
-		#con_flag = convergence_fun(mol)
-		if atoms.max_f<=atoms.f_max_th and atoms.rms_f<=atoms.f_rms_th and atoms.max_dp <=atoms.dp_max_th and atoms.rms_dp<=atoms.dp_rms_th:
-			return iteration 
-	return  iteration          	    
-#################################################################################
+        # ================================
+        # ✅ 收敛判据 & 日志输出（原样保留）
+        # ================================
+        atoms.max_dp = np.abs(step).max()
+        atoms.rms_dp = np.sqrt((step ** 2).sum() / step.size * 3)
+        atoms.max_f = np.abs(f).max()
+        atoms.rms_f = np.sqrt((f ** 2).sum() / step.size * 3)
 
+        iter = f"Iteration: {iteration}"
+        info_message = ['\n' + '-' * 70 + '\n', f'{iter.center(70)}\n\n']
+        info_message.append(f'\n{"Coordinates".center(70)}\n')
+        info_message.append('-' * 70)
+        info_message.append('\n')
 
-	 
+        for atom_index, atom in enumerate(atoms):
+            element_type = atom.symbol
+            coord = atom.position
+            info_message.append(f"{atom_index:<4} {element_type:<2} {coord[0]:>20.4f} {coord[1]:>20.4f} {coord[2]:>20.4f}\n")
 
+        info_message.append(f"\n\nEnergy:                {e:>12.6f} Convergence criteria  Is converged \n")
+
+        if atoms.max_f > atoms.f_max_th:
+            info_message.append(f"Maximum Force:         {atoms.max_f:>12.6f} {atoms.f_max_th:>12.6f}                No\n")
+        else:
+            info_message.append(f"Maximum Force:         {atoms.max_f:>12.6f} {atoms.f_max_th:>12.6f}                Yes\n")
+
+        if atoms.rms_f > atoms.f_rms_th:
+            info_message.append(f"RMS Force:             {atoms.rms_f:>12.6f} {atoms.f_rms_th:>12.6f}                No\n")
+        else:
+            info_message.append(f"RMS Force:             {atoms.rms_f:>12.6f} {atoms.f_rms_th:>12.6f}                Yes\n")
+
+        if atoms.max_dp > atoms.dp_max_th:
+            info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                No\n")
+        else:
+            info_message.append(f"Maximum Displacement:  {atoms.max_dp:>12.6f} {atoms.dp_max_th:>12.6f}                Yes\n")
+
+        if atoms.rms_dp > atoms.dp_rms_th:
+            info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                No\n")
+        else:
+            info_message.append(f"RMS Displacement:      {atoms.rms_dp:>12.6f} {atoms.dp_rms_th:>12.6f}                Yes\n")
+
+        log_info(info_message, output)
+
+        if (
+            atoms.max_f <= atoms.f_max_th
+            and atoms.rms_f <= atoms.f_rms_th
+            and atoms.max_dp <= atoms.dp_max_th
+            and atoms.rms_dp <= atoms.dp_rms_th
+        ):
+            return iteration
+
+    return iteration

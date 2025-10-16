@@ -8,7 +8,7 @@ class Dispatcher():
     def __init__(self):
         pass
 
-    def __call__(self, commandcontrol, jobtype: int, atoms: Union[Atoms, List[Atoms]], output:str, method: str='LBFGS', extra:dict=None, ) -> None:
+    def __call__(self, commandcontrol: dict, jobtype: int, atoms: Union[Atoms, List[Atoms]], output:str, extra:dict=None, ) -> None:
 
         """
         Dispatches the job based on the job type.
@@ -23,14 +23,13 @@ class Dispatcher():
         self.output = output
         self.commandcontrol = commandcontrol
         self.set_throshould(atoms)
-        
+
         if jobtype == 'opt':
             from .optimization import Optmization
 
             if isinstance(atoms, list):
                 raise NotImplementedError('For optimization job, only one Atoms object is allowed.')
-
-            opt = Optmization(output=output, atoms=atoms, method=method)
+            opt = Optmization(output=output, atoms=atoms, method=commandcontrol.params.get('method'))
             opt.run()
             
         elif jobtype == 'sp':
@@ -53,7 +52,7 @@ class Dispatcher():
             if isinstance(atoms, list):
                 raise NotImplementedError('For scan job, only one Atoms object is allowed.')
 
-            scan = Scan(output=output, atoms=atoms, method=method, constraints=extra['scan'])
+            scan = Scan(output=output, atoms=atoms, method=commandcontrol.params.get('method'), constraints=extra['scan'])
             scan.run()
             
         elif jobtype == 'freq':
@@ -93,6 +92,7 @@ class Dispatcher():
             atoms: The ASE Atoms object.
         """
         
+        # TODO: change the throshould based on the Eh/Angstrom unit
         if self.commandcontrol.params.get('level') == 'high':
             self.commandcontrol.params['f_max_th'] = 0.00015
             self.commandcontrol.params['f_rms_th'] = 0.0001
@@ -101,8 +101,8 @@ class Dispatcher():
             
         # default level is medium
         elif self.commandcontrol.params.get('level') == 'medium':
-            self.commandcontrol.params['f_max_th'] = 0.00045
-            self.commandcontrol.params['f_rms_th'] = 0.0003
+            self.commandcontrol.params['f_max_th'] = 0.00085
+            self.commandcontrol.params['f_rms_th'] = 0.00055
             self.commandcontrol.params['dp_max_th'] = 0.0018   
             self.commandcontrol.params['dp_rms_th'] = 0.0012
         
@@ -112,6 +112,12 @@ class Dispatcher():
             self.commandcontrol.params['f_rms_th'] = 0.0005
             self.commandcontrol.params['dp_max_th'] = 0.003   
             self.commandcontrol.params['dp_rms_th'] = 0.002
+        
+        else:
+            self.commandcontrol.params['f_max_th'] = 0.00085
+            self.commandcontrol.params['f_rms_th'] = 0.00055
+            self.commandcontrol.params['dp_max_th'] = 0.0018   
+            self.commandcontrol.params['dp_rms_th'] = 0.0012
 
         if isinstance(atoms, list):
             for atom in atoms:
@@ -124,6 +130,8 @@ class Dispatcher():
             atoms.f_rms_th=self.commandcontrol.params['f_rms_th']
             atoms.dp_max_th=self.commandcontrol.params['dp_max_th']   
             atoms.dp_rms_th=self.commandcontrol.params['dp_rms_th']
+
+
 
     def log_error(self, error_message: str) -> None:
         """

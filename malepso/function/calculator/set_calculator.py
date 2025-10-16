@@ -6,10 +6,10 @@ from .ani._ani_calculator import ANICalculator
 from .mace._mace_calculator import MACECalculator
 
 IMPLEMENTATION_MODELs = [
-            'ANI-2x',
-            'ANI-1x',
-            'ANI-1ccx',
-            'ANI-1xnr',
+            'ani2x',
+            'ani1x',
+            'ani1ccx',
+            'ani1xnr',
             'maceoff23s',
             'maceoff23m',
             'maceoff23l',
@@ -25,7 +25,7 @@ class SetClaculator():
         self.model = model
         self.d4 = d4
         self.device = device
-        self.model = self.model.lower().replace('_', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+        self.model = model
 
     def set_calculator(self) -> ase.calculators.calculator.Calculator:
 
@@ -39,10 +39,14 @@ class SetClaculator():
             return calculator
         else:
             if self.d4 == True : self.log_info([f"\n [WARNING:] D4 is not supported for model {self.model}. D4 will be ignored.\n"])
-            if self.model in ['maceoff23s', 'maceoff23m', 'maceoff23l']:
+            if self.model in ['maceoff23s', 'maceoff23m', 'maceoff23l','egret']:
                 from .mace._mace_calculator import MACECalculator
                 calculator = MACECalculator(model=self.model, device=self.device)
                 return calculator   
+            elif self.model in ['aimnet2']:
+                from .aimnet._aimnet2_calculator import AIMNet2Calculator
+                calculator = AIMNet2Calculator(model=self.model, device=self.device)
+                return calculator
             else:
                 raise ValueError(f"Model '{self.model}' is not implemented yet.")
         
