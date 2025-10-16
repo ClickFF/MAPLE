@@ -24,17 +24,16 @@ class ANICalculator(CalcABC):
         super().__init__()
         info_message = [f"\nLoading the Machine Learning Potential Model...\n"]
         
-        # Normalize model name
-        model = model.replace('-', '').lower()
         
         model_dir = os.path.dirname(os.path.realpath(__file__))
+        model_dir = os.path.dirname(model_dir)
         model_path = os.path.join(model_dir, 'model', f'{model}.pt')
         
         self.model = torch.jit.load(model_path, map_location=device)
         self.model.eval()
         
         
-        info_message.append(f'Loading ANI model ({model}) successfully.\n')
+        info_message.append(f'Loading model ({model}) successfully.\n')
         for p in self.model.parameters():
             p.requires_grad_(False)
 

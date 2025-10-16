@@ -598,7 +598,7 @@ class GSM(JobABC):
         # NEB-TS style summary (as requested)
         log_info([
             "\n---------------------------------------------------------------\n",
-            "                      PATH SUMMARY FOR NEB-TS             \n",
+            "                    PATH SUMMARY FOR String-TS             \n",
             "---------------------------------------------------------------\n",
             "All forces in Eh/Angstrom. Global forces for TS.\n\n",
             "Image     E(Eh)   dE(kcal/mol)  max(|Fp|)  RMS(Fp)\n"

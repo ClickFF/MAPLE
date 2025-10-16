@@ -12,7 +12,14 @@ class CommandControl:
     directly. If no task is defined, 'sp' is assumed.
     """
 
-    SUPPORTED_MODELS = {"ANI-2x", "ANI-1x", "ANI-1ccx", "ANI-1xnr"}
+    SUPPORTED_MODELS = {"ANI-2x", "ANI-1x", "ANI-1ccx", "ANI-1xnr",
+            'maceoff23s',
+            'maceoff23m',
+            'maceoff23l',
+            'egret',
+            'aimnet2',
+            'uma'}
+
     SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq"}
 
     DEFAULTS = {
