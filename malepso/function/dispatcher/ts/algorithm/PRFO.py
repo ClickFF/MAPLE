@@ -437,7 +437,7 @@ def RFO(atoms: Atoms, output) -> Atoms:
 # ============  Helpers (kept)  ===========
 # =========================================
 def calculate_Hessian(atoms: Atoms):
-    calc = atoms.get_calculator()
+    calc = atoms.calc
     H = calc.get_hessian(atoms)
     return to_numpy_f64(H)
 

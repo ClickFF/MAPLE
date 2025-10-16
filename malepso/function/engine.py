@@ -45,7 +45,7 @@ class engine():
             self.atoms.set_calculator(self.calulator)
         elif isinstance(self.atoms, list):     
             for atom in self.atoms:
-                atom.set_calculator(self.calulator)
+                atom.calc = self.calulator
                 
         # Self.atoms printing
         self._jobtype_dispatcher(self.commandcontrol, self.jobtype, self.atoms, self.output, extra=self.extra)

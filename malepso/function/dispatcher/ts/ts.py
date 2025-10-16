@@ -8,14 +8,17 @@ from ..jobABC import JobABC
 
 class TransitionState(JobABC):
 
-    def __init__(self, output: str, atoms: Atoms, params: dict,criteria:str='default'):
+    def __init__(self, output: str, atoms: Atoms, params: dict, method:str=None, criteria:str='default'):
         super().__init__(output)
         self.atoms = atoms
         self.params = params
-        self.method=self.params.get('method')
+        self.method= method
 
     def run(self):
-        if self.method == 'newton':
+        if self.method is None:
+            raise ValueError('Method is not provided.')
+
+        elif self.method == 'newton':
             from .algorithm import Newton
             Newton(self.atoms, output=self.output)
         elif self.method == 'prfo':
@@ -35,8 +38,8 @@ class TransitionState(JobABC):
         elif self.method == 'string':
             if not isinstance(self.atoms, list):
                 raise ValueError('For String method, you should provide at least two structures (initial and final states).')
-            from .algorithm import String
-            string = String(
+            from .algorithm import GSM
+            string = GSM(
                 output=self.output,
                 atoms_R=self.atoms[0],
                 atoms_P=self.atoms[1],

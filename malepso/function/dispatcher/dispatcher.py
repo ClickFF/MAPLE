@@ -68,7 +68,7 @@ class Dispatcher():
         elif jobtype == 'ts':
             from .ts import TransitionState
             if isinstance(atoms, list):
-                if commandcontrol.params.get('method') in ['neb', 'string']:
+                if commandcontrol.params.get('method') in ['neb', 'string', 'dimer']:
                     ts = TransitionState(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
                     ts.run()
                     return
