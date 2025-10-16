@@ -17,19 +17,19 @@ class CommandControl:
 
     DEFAULTS = {
         "model": None,
-        "gpuid": None,
+        "device": None,
         "d4": False,
         "sp": {},
         "opt": {"method": "lbfgs", "maxiter": 200, "convergence": 1e-5},
-        "ts": {"method": "dimer", "maxiter": 200, "neb_images": 7},
-        "scan": {"start": None, "end": None, "step": 0.1, "method": "lbfgs"},
-        "freq": {"method": "mw"},
+        "ts": {"method": "prfo", "maxiter": 200, "neb_images": 7, "level": "medium", "refine": None},
+        "scan": {"method": "lbfgs"},
+        "freq": {"method": "mw", "temperature": 298.15},
     }
 
     IMPLEMENTATION_MAP = {
-        "opt": {"lbfgs", "bfgs", "cg", "fire"},
+        "opt": {"lbfgs", "rfo", "cg", ""},
         "scan": {"lbfgs", "cg"},
-        "ts": {"dimer", "string", "neb"},
+        "ts": {"prfo", "string", "neb", "dimer"},
         "freq": {"mw", "nonmw"},
         "sp": set()
     }

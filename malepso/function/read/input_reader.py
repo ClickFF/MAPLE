@@ -4,16 +4,19 @@ from typing import Any, List, Union
 
 from ase import Atoms
 import numpy as np
+import torch
 
 from .filereader import XYZReader
 from .command_control import CommandControl
+
+from .header.header import print_banner
 
 class InputReader():
     def __init__(self):
         self.input:str = None
         self.output:str = None
         self.error:bool = False
-        self.gpuid:int = None
+        self.device:torch.device = None
 
         self.model:int = None
         # 1: ANI-2x
@@ -66,6 +69,8 @@ class InputReader():
             # Remove existing output file if present
             if os.path.exists(self.output):
                 os.remove(self.output)
+            
+            print_banner(self.output)
 
             # ------------------------------------------------------------------
             # Robust three-section split:
@@ -218,7 +223,26 @@ class InputReader():
 
             # Assign key parameters
             self.model = params.get("model").lower()
-            self.gpuid = params.get("gpuid")
+
+            dev_str: str = params.get("device", "cpu").lower()
+
+            # Automatically handle GPU/CPU selection
+            if dev_str.startswith("gpu") or dev_str.startswith("cuda"):
+                idx = ''.join([c for c in dev_str if c.isdigit()])
+                cuda_idx = idx if idx != '' else '0'
+                if torch.cuda.is_available():
+                    self.device = torch.device(f'cuda:{cuda_idx}')
+                else:
+                    self.log_info("\nWARNING: CUDA is not available. Falling back to CPU.\n")
+                    self.device = torch.device('cpu')
+            else:
+                try:
+                    self.device = torch.device(dev_str)
+                except:
+                    self.log_info("\nWARNING: Unrecognized device. Falling back to CPU.\n")
+                    self.device = torch.device('cpu')
+
+            
             self.d4 = params.get("d4", False)
             self.jobtype = params.get("task")  # ← now replaces jobtype
 
@@ -313,13 +337,15 @@ class InputReader():
                         atoms = XYZReader(file_path)  # robust reader
                         atoms_list.append(atoms)
 
-                        group_counter += 1
-                        info_message.append(f"\nGroup {group_counter} (from file: {file_path})\n")
-                        info_message.append('-' * 20 + '\n')
-                        syms = atoms.get_chemical_symbols()
-                        poss = atoms.get_positions()
-                        for i, (e, (x, y, z)) in enumerate(zip(syms, poss), start=1):
-                            info_message.append(f"{i:<4} {e:<2} {x:>20.6f} {y:>20.6f} {z:>20.6f}\n")
+                        # Multiple structures from multiple files
+
+                        # group_counter += 1
+                        # info_message.append(f"\nGroup {group_counter} (from file: {file_path})\n")
+                        # info_message.append('-' * 20 + '\n')
+                        # syms = atoms.get_chemical_symbols()
+                        # poss = atoms.get_positions()
+                        # for i, (e, (x, y, z)) in enumerate(zip(syms, poss), start=1):
+                        #     info_message.append(f"{i:<4} {e:<2} {x:>20.6f} {y:>20.6f} {z:>20.6f}\n")
                     continue
 
                 # Case 2: mixed XYZ + inline in the same block -> force user to split

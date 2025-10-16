@@ -223,7 +223,7 @@ def prfo_step(H, g, is_ts=False, target_mode=None, trust_radius=0.2,
 # =========================================
 # ============   TS Optimizer   ===========
 # =========================================
-def RFO(atoms: Atoms, output):
+def RFO(atoms: Atoms, output) -> Atoms:
     """
     TS search using Dual-Shift PRFO + trust region (RS-PRFO) + mode-following (mass-weighted).
     - Geometry update in Cartesian; step computed & trust-region enforced in MW coords.
@@ -248,6 +248,8 @@ def RFO(atoms: Atoms, output):
     converged = False
     iteration = 0  # count only accepted steps
 
+    info_message = [f"\nStarting Transition State Search (TS) with RS-PRFO...\n"]
+    log_info(info_message, output)
     while iteration < max_iter:
         iter_str = f"Iteration: {iteration+1}"
 
@@ -371,8 +373,6 @@ def RFO(atoms: Atoms, output):
 
                 # ====== logging (保持你的格式) ======
                 info_message = ['\n' + '-' * 70 + '\n', f'{iter_str.center(70)}\n\n']
-                info_message.append(f"lambda1: {'N/A(PRFO)'}, lambda2: {'N/A(PRFO)'}\n")
-                info_message.append(f"lowest eigenvalue: {lowest}, second lowest eigenvalue: {second_lowest}\n")
 
                 info_message.append(f'\n{"Coordinates".center(70)}\n')
                 info_message.append('-' * 70)
@@ -425,19 +425,19 @@ def RFO(atoms: Atoms, output):
                     converged = True
                     info_message = ['\n\n' + '-' * 70 + '\n', f'{"Normal Termination".center(70)}\n\n']
                     log_info(info_message, output)
-                    return iteration + 1, converged
+                    return atoms
 
-        # 如果连续多次拒绝直到 trust_min 仍然 bad_model，我们已经“接受最小半径步”并继续
+        
         iteration += 1
 
-    print("未能在最大迭代次数内收敛")
-    return iteration, False
+    log_info(output, [f'\n\n{"Maximum Iterations Reached".center(70)}\n\n'])
+    return atoms
 
 # =========================================
 # ============  Helpers (kept)  ===========
 # =========================================
 def calculate_Hessian(atoms: Atoms):
-    calc = atoms.get_calculator()
+    calc = atoms.calc
     H = calc.get_hessian(atoms)
     return to_numpy_f64(H)
 
