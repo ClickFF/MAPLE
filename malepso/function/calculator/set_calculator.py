@@ -47,6 +47,10 @@ class SetClaculator():
                 from .aimnet._aimnet2_calculator import AIMNet2Calculator
                 calculator = AIMNet2Calculator(model=self.model, device=self.device)
                 return calculator
+            elif self.model in ['uma']:
+                from .uma._uma_calculator import UMACalculator
+                calculator = UMACalculator(model=self.model, device=self.device)
+                return calculator
             else:
                 raise ValueError(f"Model '{self.model}' is not implemented yet.")
         

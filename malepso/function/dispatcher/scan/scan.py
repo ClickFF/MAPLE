@@ -8,23 +8,12 @@ from ase.constraints import FixInternals
 from ..jobABC import JobABC
 
 class Scan(JobABC):
-	def __init__(self, output:str, atoms:Atoms, method:str='RFO',criteria:int=2, constraints:list=None):
+	def __init__(self, output:str, atoms:Atoms, method:str='lbfgs',criteria:int=2, constraints:list=None):
 		super().__init__(output)
 		self.atoms = atoms
 		self.method = method
 		self.output = output
 		self.constraints = self.convert_constraints(constraints)
-
-		if criteria == 1:
-			self.atoms.f_max_th=0.00045*27.211386024367243
-			self.atoms.f_rms_th=0.0003*27.211386024367243
-			self.atoms.dp_max_th=0.0018   
-			self.atoms.dp_rms_th=0.0012
-		elif criteria == 2: # loose criteria
-			self.atoms.f_max_th=0.0025*27.211386024367243
-			self.atoms.f_rms_th=0.0016*27.211386024367243
-			self.atoms.dp_max_th=0.01   
-			self.atoms.dp_rms_th=0.006667
 
 	def convert_constraints(self, original_constraints):
 		"""

@@ -92,32 +92,50 @@ class Dispatcher():
             atoms: The ASE Atoms object.
         """
         
-        # TODO: change the throshould based on the Eh/Angstrom unit
-        if self.commandcontrol.params.get('level') == 'high':
-            self.commandcontrol.params['f_max_th'] = 0.00015
-            self.commandcontrol.params['f_rms_th'] = 0.0001
-            self.commandcontrol.params['dp_max_th'] = 0.0006
-            self.commandcontrol.params['dp_rms_th'] = 0.0004
-            
-        # default level is medium
+        # Geometry optimization convergence thresholds (Eh/Å and Å), Gaussian-style
+        if self.commandcontrol.params.get('level') == 'extratight':
+            self.commandcontrol.params['f_max_th'] = 0.00030
+            self.commandcontrol.params['f_rms_th'] = 0.00020
+            self.commandcontrol.params['dp_max_th'] = 0.00030
+            self.commandcontrol.params['dp_rms_th'] = 0.00020
+
+        elif self.commandcontrol.params.get('level') == 'tight':
+            self.commandcontrol.params['f_max_th'] = 0.00085
+            self.commandcontrol.params['f_rms_th'] = 0.00055
+            self.commandcontrol.params['dp_max_th'] = 0.00110
+            self.commandcontrol.params['dp_rms_th'] = 0.00075
+
         elif self.commandcontrol.params.get('level') == 'medium':
-            self.commandcontrol.params['f_max_th'] = 0.00085
-            self.commandcontrol.params['f_rms_th'] = 0.00055
-            self.commandcontrol.params['dp_max_th'] = 0.0018   
-            self.commandcontrol.params['dp_rms_th'] = 0.0012
-        
-        # low level
-        elif self.commandcontrol.params.get('level') == 'low':
-            self.commandcontrol.params['f_max_th'] = 0.00075
-            self.commandcontrol.params['f_rms_th'] = 0.0005
-            self.commandcontrol.params['dp_max_th'] = 0.003   
-            self.commandcontrol.params['dp_rms_th'] = 0.002
-        
+            self.commandcontrol.params['f_max_th'] = 0.00285
+            self.commandcontrol.params['f_rms_th'] = 0.00190
+            self.commandcontrol.params['dp_max_th'] = 0.00315
+            self.commandcontrol.params['dp_rms_th'] = 0.00210
+
+        elif self.commandcontrol.params.get('level') == 'loose':
+            self.commandcontrol.params['f_max_th'] = 0.00380
+            self.commandcontrol.params['f_rms_th'] = 0.00250
+            self.commandcontrol.params['dp_max_th'] = 0.00600
+            self.commandcontrol.params['dp_rms_th'] = 0.00400
+
+        elif self.commandcontrol.params.get('level') == 'extraloose':
+            self.commandcontrol.params['f_max_th'] = 0.00755
+            self.commandcontrol.params['f_rms_th'] = 0.00500
+            self.commandcontrol.params['dp_max_th'] = 0.01200
+            self.commandcontrol.params['dp_rms_th'] = 0.00800
+
+        elif self.commandcontrol.params.get('level') == 'superloose':
+            self.commandcontrol.params['f_max_th'] = 0.08500
+            self.commandcontrol.params['f_rms_th'] = 0.05500
+            self.commandcontrol.params['dp_max_th'] = 0.14500
+            self.commandcontrol.params['dp_rms_th'] = 0.09500
+
         else:
-            self.commandcontrol.params['f_max_th'] = 0.00085
-            self.commandcontrol.params['f_rms_th'] = 0.00055
-            self.commandcontrol.params['dp_max_th'] = 0.0018   
-            self.commandcontrol.params['dp_rms_th'] = 0.0012
+            # fallback to medium
+            self.commandcontrol.params['f_max_th'] = 0.00285
+            self.commandcontrol.params['f_rms_th'] = 0.00190
+            self.commandcontrol.params['dp_max_th'] = 0.00315
+            self.commandcontrol.params['dp_rms_th'] = 0.00210
+
 
         if isinstance(atoms, list):
             for atom in atoms:
