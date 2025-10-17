@@ -12,7 +12,14 @@ class CommandControl:
     directly. If no task is defined, 'sp' is assumed.
     """
 
-    SUPPORTED_MODELS = {"ANI-2x", "ANI-1x", "ANI-1ccx", "ANI-1xnr"}
+    SUPPORTED_MODELS = {"ani2x", "ani1x", "ani1ccx", "ani1xnr",
+            'maceoff23s',
+            'maceoff23m',
+            'maceoff23l',
+            'egret',
+            'aimnet2',
+            'uma'}
+
     SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq"}
 
     DEFAULTS = {
@@ -94,6 +101,9 @@ class CommandControl:
             task = "sp"
             params.update(cls.DEFAULTS.get("sp", {}))
             log_lines.append("No task specified. Defaulting to 'sp'.\n")
+
+        if 'model' in params and params['model'] is not None:
+            params['model'] = params['model'].lower().replace('_', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
 
         # ✅ run validation and implementation checks
         cls._validate(params, task, output_path)

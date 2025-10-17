@@ -246,6 +246,7 @@ class InputReader():
             self.d4 = params.get("d4", False)
             self.jobtype = params.get("task")  # ← now replaces jobtype
 
+
             self.log_info([cc.summary()])
 
         except ValueError as e:
@@ -484,7 +485,7 @@ class InputReader():
 
                 # ---- Scan command ----
                 elif cmd == 'S':
-                    if self.jobtype != 3:
+                    if self.jobtype != 'scan':
                         raise ValueError("Scan command is only available for jobtype=3 (scan).")
 
                     # Parse numeric parameters, last two are step size and steps

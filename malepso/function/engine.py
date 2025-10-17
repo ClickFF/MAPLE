@@ -87,9 +87,9 @@ class engine():
                     The device to run the model on.
         """
         
-        from .calculator.ani import ANICalculator
-        calculator = ANICalculator(device, model, self.output, d4=self.d4)
-        self.calulator = calculator
+        from .calculator import SetClaculator
+        setcalculator = SetClaculator(device, model, self.output, d4=self.d4)
+        self.calulator = setcalculator.set_calculator()
     
     def _jobtype_dispatcher(self, commandcontrol, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, extra:dict=None) -> None:
         """

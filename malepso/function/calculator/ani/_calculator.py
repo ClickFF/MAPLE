@@ -90,11 +90,11 @@ class Calculator():
                     device = torch.device(f'cuda:{gpuid}')
                     info_message.append(f'Using GPU {gpuid} for calculation.\n')
                 except:
-                    info_message.append(f'ERROR: GPU {gpuid} is not available.\n')
+                    info_message.append(f'\n[ERROR]: GPU {gpuid} is not available.\n')
                     self.log_info(info_message)
                     raise ValueError(f'GPU {gpuid} is not available.\n')
             else:
-                info_message.append('ERROR: CUDA is not available.\n')
+                info_message.append('\n[ERROR]: CUDA is not available.\n')
                 self.log_info(info_message)
                 raise ValueError('CUDA is not available.\n')
         else:
