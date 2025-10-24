@@ -26,6 +26,6 @@ if __name__ == '__main__':
 
     # AIMNet2 LBFGS
     if test_control == 5:
-        path = os.path.join(software_dir, 'example', 'opt', 'lbfgs', 'inp1.inp')
+        path = os.path.join(software_dir, 'example', 'opt', 'rfo', 'inp1.inp')
 
     engine(path)

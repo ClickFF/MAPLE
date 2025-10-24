@@ -29,7 +29,7 @@ class Dispatcher():
 
             if isinstance(atoms, list):
                 raise NotImplementedError('For optimization job, only one Atoms object is allowed.')
-            opt = Optmization(output=output, atoms=atoms, method=commandcontrol.params.get('method'))
+            opt = Optmization(output=output, atoms=atoms, method=commandcontrol.params.get('method'),params=commandcontrol.params)
             opt.run()
             
         elif jobtype == 'sp':
