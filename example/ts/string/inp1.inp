@@ -1,0 +1,10 @@
+#model=ANI-1xnr
+#ts(method=string,refine=stringts)
+#device=gpu0
+
+XYZ /home/user/software/MaLePSO/example/ts/neb/react.xyz
+
+XYZ /home/user/software/MaLePSO/example/ts/neb/prod.xyz
+
+
+

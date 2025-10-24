@@ -20,7 +20,7 @@ class CommandControl:
             'aimnet2',
             'uma'}
 
-    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq"}
+    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc"}
 
     DEFAULTS = {
         "model": None,
@@ -37,8 +37,9 @@ class CommandControl:
         "opt": {"lbfgs", "rfo", "cg", ""},
         "scan": {"lbfgs", "cg"},
         "ts": {"prfo", "string", "neb", "dimer"},
-        "freq": {"mw", "nonmw"},
-        "sp": set()
+        "freq": {"mw", "nonmw", "both"},
+        "sp": set(),
+        "irc": {'gs'},
     }
 
     def __init__(self, params: Dict[str, Any], task: str, output_path: Optional[str] = None):

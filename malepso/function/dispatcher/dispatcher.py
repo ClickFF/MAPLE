@@ -76,6 +76,14 @@ class Dispatcher():
 
             ts = TransitionState(output=output, atoms=atoms, params=commandcontrol.params)
             ts.run()
+        
+        elif jobtype == 'irc':
+            from .irc import IRC
+
+            if isinstance(atoms, list):
+                raise NotImplementedError('For IRC job, only one Atoms object is allowed.')
+            irc = IRC(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
+            irc.run()
             
             
         else:

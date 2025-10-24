@@ -54,6 +54,27 @@ class UMACalculator(FAIRChemCalculator):
         super().__init__(predict_unit=predictor, task_name="omol")
         self.device = torch.device(device)
 
+    def get_energy(self, atoms: Atoms) -> torch.Tensor:
+        """
+        Compute total energy (Hartree) for a given atomic structure.
+
+        Args:
+            atoms (ase.Atoms): Atomic structure.
+
+        Returns:
+            torch.Tensor: Total energy in Hartree.
+        """
+        self.calculate(atoms, properties=["energy"], system_changes=all_changes)
+        energy_value = self.results["energy"]
+        return torch.tensor(energy_value, dtype=torch.float32, device=self.device)
+    
+    def get_hessian(self, atoms: Atoms) -> torch.Tensor:
+        # 1. 基础检查
+        raise NotImplementedError("Hessian calculation is not implemented yet for UMA model. If your calculation requires Hessian, please consider using other calculator instead.")
+
+
+
+
 
     
     def calculate(self, atoms, properties=None, system_changes=None):
