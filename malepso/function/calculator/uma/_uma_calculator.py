@@ -3,10 +3,13 @@ import torch
 import numpy as np
 from typing import Literal
 from ase import Atoms
+from ase.calculators.calculator import all_changes
+from ase.calculators.calculator import Calculator
 
 try:
     from fairchem.core import pretrained_mlip
     from fairchem.core.calculate.ase_calculator import FAIRChemCalculator
+    from fairchem.core.datasets import data_list_collater
 except ImportError:
     raise ImportError("fairchem-core is not installed. Please install it first.")
 
@@ -61,55 +64,19 @@ class UMACalculator(FAIRChemCalculator):
         Returns:
             torch.Tensor: Total energy in Hartree.
         """
-        self.calculate(atoms, properties=["energy"], system_changes=atoms.calc_check())
+        self.calculate(atoms, properties=["energy"], system_changes=all_changes)
         energy_value = self.results["energy"]
         return torch.tensor(energy_value, dtype=torch.float32, device=self.device)
-
+    
     def get_hessian(self, atoms: Atoms) -> torch.Tensor:
-        """
-        Compute the Hessian matrix using autograd. Complexity is O(N^2).
+        # 1. 基础检查
+        raise NotImplementedError("Hessian calculation is not implemented yet for UMA model. If your calculation requires Hessian, please consider using other calculator instead.")
 
-        Args:
-            atoms (ase.Atoms): Atomic structure.
 
-        Returns:
-            torch.Tensor: Hessian matrix (3N x 3N) in Hartree/Å².
-        """
-        coords = torch.tensor(
-            atoms.get_positions(),
-            dtype=torch.float32,
-            device=self.device,
-            requires_grad=True,
-        ).unsqueeze(0)
 
-        energy = self._energy_from_tensor(atoms, coords)
-        grad = torch.autograd.grad(energy, coords, create_graph=True)[0].view(-1)
 
-        num_atoms = coords.shape[1]
-        hessian = torch.zeros(
-            (3 * num_atoms, 3 * num_atoms), dtype=torch.float32, device=self.device
-        )
-        for i in range(3 * num_atoms):
-            grad2 = torch.autograd.grad(grad[i], coords, retain_graph=True)[0].view(-1)
-            hessian[i, :] = grad2
 
-        return hessian
-
-    def _energy_from_tensor(self, atoms: Atoms, coords: torch.Tensor) -> torch.Tensor:
-        """
-        Internal helper: recompute total energy from a coordinate tensor.
-
-        Args:
-            atoms (ase.Atoms): Original atomic structure.
-            coords (torch.Tensor): Atomic positions tensor.
-
-        Returns:
-            torch.Tensor: Total energy.
-        """
-        atoms_copy = atoms.copy()
-        atoms_copy.set_positions(coords.squeeze(0).detach().cpu().numpy())
-        return self.get_energy(atoms_copy)
-
+    
     def calculate(self, atoms, properties=None, system_changes=None):
         """
         Override base calculate() to convert energy and forces into Hartree.

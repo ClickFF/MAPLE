@@ -1,0 +1,8 @@
+#model=ANI-1xnr
+#freq
+#device=gpu0
+
+XYZ /home/user/software/MaLePSO/example/freq/mw/inp1.xyz
+
+
+

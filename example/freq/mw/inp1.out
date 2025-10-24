@@ -1,0 +1,30 @@
+
+**********************************************************************
+*                                                                    *
+*                        M   A   P   L   E                           *
+*                                                                    *
+*      MAchine-learning Potential for Landscape Exploration          *
+*                                                                    *
+*                                                                    *
+*      © 2025 University of Pittsburgh. All rights reserved.         *
+*      Licensed under CC BY 4.0 for academic use.                    *
+*                                                                    *
+*      Principal Developer:  Xujian Wang                             *
+*                                                                    *
+**********************************************************************
+
+
+Parsing # commands...
+Global parameter: model = ANI-1xnr
+Task set to 'freq'
+Global parameter: device = gpu0
+Parsed configuration:
+----------------------------------------
+Task: freq
+model          : ani1xnr
+method         : mw
+temperature    : 298.15
+device         : gpu0
+
+                             Coordinates                              
+**********************************************************************

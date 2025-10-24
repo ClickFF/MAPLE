@@ -5,7 +5,7 @@ from malepso.function.engine import engine
 if __name__ == '__main__':
     engine = engine()
     
-    test_control = 5
+    test_control = 6
 
     software_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
@@ -26,6 +26,14 @@ if __name__ == '__main__':
 
     # AIMNet2 LBFGS
     if test_control == 5:
-        path = os.path.join(software_dir, 'example', 'opt', 'lbfgs', 'inp1.inp')
+        path = os.path.join(software_dir, 'example', 'opt', 'rfo', 'inp1.inp')
+    
+    # IRC GS
+    if test_control == 6:
+        path = os.path.join(software_dir, 'example', 'irc', 'gs', 'inp1.inp')
+
+    # Frequency MW
+    if test_control == 7:
+        path = os.path.join(software_dir, 'example', 'freq', 'mw', 'inp1.inp')
 
     engine(path)

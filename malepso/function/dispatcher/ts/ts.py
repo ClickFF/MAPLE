@@ -8,7 +8,7 @@ from ..jobABC import JobABC
 
 class TransitionState(JobABC):
 
-    def __init__(self, output: str, atoms: Atoms, params: dict, method:str=None, criteria:str='default'):
+    def __init__(self, output: str, atoms: Atoms, params: dict, method:str=None):
         super().__init__(output)
         self.atoms = atoms
         self.params = params
