@@ -1,0 +1,31 @@
+Preprocessing the settings ...
+Model: ANI-2x.
+Job type: sp.
+DFT-D4 dispersion correction is enabled.
+GPU ID is not set. Using CPU to calculate.
+
+                             Coordinates                              
+**********************************************************************
+1    C                0.6537               1.0201               0.2504
+2    C               -0.9513              -1.0293               0.5747
+3    C                1.9589              -0.9362               0.0052
+4    N                0.7908              -0.1495              -0.3885
+5    N               -0.4224               1.8016               0.0156
+6    O               -1.8721              -0.7145              -0.3936
+7    H               -1.4915              -0.9917              -1.2372
+8    H                1.9350               1.4390              -0.7627
+9    H                1.1408               1.2095               1.2091
+10   H               -1.0600               1.5687              -0.7248
+11   H               -0.6428               2.5618               0.6288
+12   H               -1.2248              -0.5947               1.5330
+13   H               -0.6131              -2.0637               0.6083
+14   H                1.6185              -1.9526               0.2063
+15   H                2.6788              -0.9740              -0.8154
+16   H                2.4740              -0.5587               0.8967
+
+Loading the Machine Learning Potential Model...
+Loading ANI model (ANI-2x) successfully.
+Using CPU for calculation.
+Setting up D4 dispersion correction...
+
+Energy: -8293.059155878605

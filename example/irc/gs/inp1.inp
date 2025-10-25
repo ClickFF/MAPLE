@@ -1,0 +1,8 @@
+#model=ANI-1xnr
+#irc(method=gs)
+#device=gpu0
+
+XYZ /home/user/software/MaLePSO/example/ts/neb/react.xyz
+
+
+

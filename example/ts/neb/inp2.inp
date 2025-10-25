@@ -1,0 +1,10 @@
+#model=aimnet2
+#ts(method=neb,refine=nebts)
+#device=gpu0
+
+XYZ /home/user/software/MaLePSO/example/ts/neb/react.xyz
+
+XYZ /home/user/software/MaLePSO/example/ts/neb/prod.xyz
+
+
+
