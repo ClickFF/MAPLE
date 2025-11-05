@@ -5,12 +5,12 @@ from malepso.function.engine import engine
 if __name__ == '__main__':
     engine = engine()
     
-    test_control = 7
+    test_control = 1
 
     software_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     if test_control == 1:
-        path = os.path.join(software_dir, 'example', 'ts', 'da.inp')
+        path = os.path.join(software_dir, 'example', 'opt', 'lbfgs', 'solv1.inp')
         
     # TS: NEB
     if test_control == 2: 

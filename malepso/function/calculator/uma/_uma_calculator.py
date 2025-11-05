@@ -13,6 +13,8 @@ try:
 except ImportError:
     raise ImportError("fairchem-core is not installed. Please install it first.")
 
+from ..extra_correction import QEqTorch
+
 EV2HARTREE = 1.0 / 27.211386245988
 
 
@@ -27,6 +29,8 @@ class UMACalculator(FAIRChemCalculator):
         device: torch.device,
         model: str = "uma",
         overrides: dict | None = None,
+        solvent_model: Literal["gbsa", "none"] = "gbsa",
+        solvent: str = 'water',
     ):
         """
         Initialize UMA Calculator.
@@ -53,6 +57,15 @@ class UMACalculator(FAIRChemCalculator):
         )
         super().__init__(predict_unit=predictor, task_name="omol")
         self.device = torch.device(device)
+        
+        if solvent_model == "none":
+            self.solvent_correction = None
+        elif solvent_model == "gbsa":
+            from ..extra_correction import GBSA
+
+            self.solvent_correction = GBSA(solvent=solvent, device=self.device)
+        
+        self.chargecalc = QEqTorch(device=self.device)
 
     def get_energy(self, atoms: Atoms) -> torch.Tensor:
         """
@@ -66,10 +79,17 @@ class UMACalculator(FAIRChemCalculator):
         """
         self.calculate(atoms, properties=["energy"], system_changes=all_changes)
         energy_value = self.results["energy"]
+
+        if self.solvent_correction:
+            solvent_energy = self.solvent_correction.get_energy(atoms)
+            energy_value += solvent_energy
+
+        print(energy_value)
+
         return torch.tensor(energy_value, dtype=torch.float32, device=self.device)
     
     def get_hessian(self, atoms: Atoms) -> torch.Tensor:
-        # 1. 基础检查
+        # 1. Currently, Hessian calculation is not implemented for UMA model.
         raise NotImplementedError("Hessian calculation is not implemented yet for UMA model. If your calculation requires Hessian, please consider using other calculator instead.")
 
 
@@ -97,5 +117,17 @@ class UMACalculator(FAIRChemCalculator):
             self.results["free_energy"] *= EV2HARTREE
         if "forces" in self.results:
             self.results["forces"] *= EV2HARTREE
+
+        if self.solvent_correction:
+            atoms.atomic_charges = self.chargecalc(atoms)
+            solvent_energy, solvent_force = self.solvent_correction.get_energy_and_force(atoms)
+            solvent_force = solvent_force.detach().cpu().numpy()
+            print(solvent_energy)
+            self.results["energy"] += solvent_energy.item()
+            self.results["free_energy"] += solvent_energy.item()
+
+            # Add solvent forces to the results
+            self.results["forces"] += solvent_force
+
 
         return self.results

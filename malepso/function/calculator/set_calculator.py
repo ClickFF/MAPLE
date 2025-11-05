@@ -28,7 +28,6 @@ class SetClaculator():
         self.model = model
 
     def set_calculator(self) -> ase.calculators.calculator.Calculator:
-
         if self.model not in IMPLEMENTATION_MODELs:
             error_message = f"\n [ERROR] Unsupported model: {self.model}\n"
             self.log_error(error_message)
