@@ -5,7 +5,7 @@ from malepso.function.engine import engine
 if __name__ == '__main__':
     engine = engine()
     
-    test_control = 6
+    test_control = 7
 
     software_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     

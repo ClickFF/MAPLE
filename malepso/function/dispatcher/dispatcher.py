@@ -57,11 +57,9 @@ class Dispatcher():
             
         elif jobtype == 'freq':
             from .frequency import Frequency
-
             if isinstance(atoms, list):
                 raise NotImplementedError('For frequency job, only one Atoms object is allowed.')
-
-            freq = Frequency(output=output, atoms=atoms)
+            freq = Frequency(output=output, atoms=atoms, paras=commandcontrol.params)
             freq.run()
             
         elif jobtype == 'ts':

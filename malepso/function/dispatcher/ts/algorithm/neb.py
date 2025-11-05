@@ -208,7 +208,7 @@ from ase import Atoms
 class NEBParams:
     n_images: int = 9                     # total images including endpoints
     k_spring: float = 0.2                 # spring "stiffness" (same units as force * length^-1)
-    max_iter: int = 200
+    max_iter: int = 256
     lbfgs_m: int = 5                      # memory size for L-BFGS
     step0: float = 0.2                    # initial step length on search direction
     step_min: float = 5e-4
