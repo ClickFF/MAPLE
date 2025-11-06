@@ -11,7 +11,13 @@ from ..calculator_base import CalcABC
 class ANICalculator(CalcABC):
     implemented_properties = ['energy', 'forces', 'stress', 'free_energy']
 
-    def __init__(self, device: torch.device, model:str = 'ani2x',  overwrite=False, d4=False):
+    def __init__(self, device: torch.device,
+        model:str = 'ani2x',
+        overwrite=False,
+        d4=False,
+        implicit: str = 'none',
+        solvent: str = 'none',
+        ):
         """
         Initialize the ANICalculator.
 
@@ -42,6 +48,9 @@ class ANICalculator(CalcABC):
         self.overwrite = overwrite
         self.d4 = d4
 
+        # Initialize implicit solvent
+        self.implicit_solv_init(implicit=implicit, solvent=solvent)
+
     def calculate(self, atoms=None, properties=['energy'],
                   system_changes=ase.calculators.calculator.all_changes):
         super().calculate(atoms, properties, system_changes)
@@ -50,11 +59,19 @@ class ANICalculator(CalcABC):
         
         energy = self.get_energy(atoms, coordinates)
 
+        if self.solvent_correction:
+            solvent_energy = self.implicit_solv_energy(atoms)
+            energy += solvent_energy
+
         self.results['energy'] = energy.item()
         self.results['free_energy'] = energy.item()
 
         if 'forces' in properties:
             forces = -torch.autograd.grad(energy, coordinates, retain_graph='stress' in properties)[0]
+            if self.solvent_correction:
+                solvent_energy, solvent_force = self.implicit_solv_energy_and_force(atoms)
+                forces += solvent_force
+                
             self.results['forces'] = forces.squeeze(0).cpu().numpy()
 
     def get_energy(self, atoms, coordinates):

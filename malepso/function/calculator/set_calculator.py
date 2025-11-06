@@ -20,36 +20,42 @@ IMPLEMENTATION_MODELs = [
 
 class SetClaculator():
 
-    def __init__(self, device: torch.device, model:str, output: str, d4:bool=False) -> None:
+    def __init__(self, device: torch.device,
+            model:str, 
+            output: str, 
+            d4:bool=False,
+            implicit:str = 'None',
+            solvent: str = 'None') -> None:
         self.output = output
         self.model = model
         self.d4 = d4
         self.device = device
         self.model = model
+        self.implicit = implicit
+        self.solvent = solvent
 
     def set_calculator(self) -> ase.calculators.calculator.Calculator:
-
         if self.model not in IMPLEMENTATION_MODELs:
             error_message = f"\n [ERROR] Unsupported model: {self.model}\n"
             self.log_error(error_message)
             raise ValueError(error_message)
 
         if self.model in ['ani2x', 'ani1x', 'ani1ccx', 'ani1xnr']:
-            calculator = ANICalculator(model=self.model, d4=self.d4, device=self.device)
+            calculator = ANICalculator(model=self.model, d4=self.d4, device=self.device, implicit = self.implicit, solvent = self.solvent)
             return calculator
         else:
             if self.d4 == True : self.log_info([f"\n [WARNING:] D4 is not supported for model {self.model}. D4 will be ignored.\n"])
             if self.model in ['maceoff23s', 'maceoff23m', 'maceoff23l','egret']:
                 from .mace._mace_calculator import MACECalculator
-                calculator = MACECalculator(model=self.model, device=self.device)
+                calculator = MACECalculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
                 return calculator   
             elif self.model in ['aimnet2']:
                 from .aimnet._aimnet2_calculator import AIMNet2Calculator
-                calculator = AIMNet2Calculator(model=self.model, device=self.device)
+                calculator = AIMNet2Calculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
                 return calculator
             elif self.model in ['uma']:
                 from .uma._uma_calculator import UMACalculator
-                calculator = UMACalculator(model=self.model, device=self.device)
+                calculator = UMACalculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
                 return calculator
             else:
                 raise ValueError(f"Model '{self.model}' is not implemented yet.")

@@ -42,7 +42,7 @@ class engine():
         self._mlp_initiator(self.model, self.device)
 
         if isinstance(self.atoms, Atoms):       
-            self.atoms.set_calculator(self.calulator)
+            self.atoms.calc = self.calulator
         elif isinstance(self.atoms, list):     
             for atom in self.atoms:
                 atom.calc = self.calulator
@@ -75,6 +75,13 @@ class engine():
             self.extra = {'scan': reader.scan_constraints}
         
         self.commandcontrol = reader.command_control
+        
+        # Explicit Solvation Treatment
+        if self.commandcontrol.get('solv', None).get('explicit', None) is not None:
+
+            from .read import ExplicitSolv
+            self.atoms = ExplicitSolv(self.atoms, params=self.commandcontrol.get('solv'), 
+                    device=self.device, output=self.output)
 
 
     def _mlp_initiator(self, model:str, device: torch.device):
@@ -88,7 +95,12 @@ class engine():
         """
         
         from .calculator import SetClaculator
-        setcalculator = SetClaculator(device, model, self.output, d4=self.d4)
+
+        implicit_method = self.commandcontrol.get('solv', None).get('method', None)
+        solvent = self.commandcontrol.get('solv', None).get('implicit', None)
+
+        setcalculator = SetClaculator(device, model, self.output, 
+                        d4=self.d4, implicit=implicit_method, solvent=solvent)
         self.calulator = setcalculator.set_calculator()
     
     def _jobtype_dispatcher(self, commandcontrol, jobtype:int, atoms:Union[Atoms,List[Atoms]], output:str, extra:dict=None) -> None:

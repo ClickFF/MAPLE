@@ -4,7 +4,7 @@ import numpy as np
 from typing import Dict, Union, Sequence, Optional
 from ase.calculators.calculator import all_changes
 from ..calculator_base import CalcABC
-
+from typing import Literal
 EV2HARTREE = 1.0 / 27.211386245988
 
 # ------------------------ Basic helpers ------------------------
@@ -113,7 +113,14 @@ class MACECalculator(CalcABC):
 
     implemented_properties = ['energy', 'forces', 'free_energy']
 
-    def __init__(self, device: torch.device, model: str = 'maceoff23s', overwrite: bool = False):
+    def __init__(self, 
+        device: torch.device, 
+        model: str = 'maceoff23s', 
+        overwrite: bool = False,
+        implicit: Literal["gbsa", "none"] = "gbsa",
+        solvent: str = 'none',
+        ):
+
         """
         Args:
             device (torch.device): Torch device.
@@ -139,6 +146,9 @@ class MACECalculator(CalcABC):
         self.r_max = float(self.model.r_max)
         self.atomic_numbers = [int(z) for z in self.model.atomic_numbers]
 
+        # Initialize implicit solvent
+        self.implicit_solv_init(implicit=implicit, solvent=solvent)
+
     def calculate(self, atoms=None, properties=['energy','forces'], system_changes=all_changes):
         """Main ASE calculation entry point."""
         super().calculate(atoms, properties, system_changes)
@@ -156,6 +166,11 @@ class MACECalculator(CalcABC):
 
         energy = total_energy_local.sum()
         energy = energy * EV2HARTREE  # Convert eV to Hartree
+
+        if self.solvent_correction:
+            solvent_energy = self.implicit_solv_energy(atoms)
+            energy += solvent_energy
+
         self.results['energy'] = energy.item()
         self.results['free_energy'] = energy.item()
 
@@ -173,7 +188,17 @@ class MACECalculator(CalcABC):
                 create_graph=False,
                 retain_graph=False
             )[0]
+
+            if self.solvent_correction:
+                solvent_energy, solvent_force = self.implicit_solv_energy_and_force(atoms)
+                forces += solvent_force
+
             self.results['forces'] = forces.detach().cpu().numpy()
+
+        if "hessian" in properties:
+            if self.solvent_correction:
+                raise NotImplementedError("Hessian calculation with implicit solvent is not implemented yet.")
+            self.results["hessian"] = self.get_hessian(atoms)
 
     def get_energy(self, atoms) -> torch.Tensor:
         """Compute total energy as a torch scalar."""

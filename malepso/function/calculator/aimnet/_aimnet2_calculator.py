@@ -1,7 +1,7 @@
 import os
 import torch
 import numpy as np
-from typing import Dict
+from typing import Dict, Literal
 from ase.calculators.calculator import Calculator, all_changes
 from ..calculator_base import CalcABC
 
@@ -64,7 +64,12 @@ def maybe_pad_dim0(a: torch.Tensor, N: int, value=0.0) -> torch.Tensor:
 class AIMNet2Calculator(CalcABC):
     implemented_properties = ["energy", "forces", "hessian", "free_energy"]
 
-    def __init__(self, device: torch.device, model: str = "aimnet2", coulomb_method: str = "simple"):
+    def __init__(self, device: torch.device, 
+                model: str = "aimnet2", 
+                coulomb_method: str = "simple",
+                implicit: Literal["gbsa", "none"] = "gbsa",
+                solvent: str = 'none',
+                ):
         super().__init__()
         self.device = device
 
@@ -82,6 +87,9 @@ class AIMNet2Calculator(CalcABC):
 
         # Coulomb settings (keep original behavior)
         self._set_lrcoulomb_method(coulomb_method)
+
+        # Initialize implicit solvent
+        self.implicit_solv_init(implicit=implicit, solvent=solvent)
 
     def _set_lrcoulomb_method(self, method: str, cutoff: float = 15.0, dsf_alpha: float = 0.2):
             """
@@ -108,7 +116,7 @@ class AIMNet2Calculator(CalcABC):
             self._coulomb_method = method
 
     # ------------------------ calculate ------------------------
-    def calculate(self, atoms=None, properties=["energy", "forces", "free_energy"], system_changes=all_changes):
+    def calculate(self, atoms=None, properties=["energy", "forces", "free_energy", "hessian"], system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
 
         coord = torch.tensor(
@@ -138,6 +146,11 @@ class AIMNet2Calculator(CalcABC):
 
         energy = self.get_energy(data)
         energy = energy * EV2HARTREE  # to Hartree
+
+        if self.solvent_correction:
+            solvent_energy = self.implicit_solv_energy(atoms)
+            energy += solvent_energy
+
         self.results["energy"] = float(energy.item())
         self.results["free_energy"] = float(energy.item())
 
@@ -146,9 +159,15 @@ class AIMNet2Calculator(CalcABC):
                 energy, data["coord"], create_graph=("hessian" in properties)
             )[0]                      # (N+1, 3)
             forces = -grad_full[:N]   # (N, 3)
-            self.results["forces"] = forces.detach().cpu().numpy()
+            if self.solvent_correction:
+                solvent_energy, solvent_force = self.implicit_solv_energy_and_force(atoms)
+                forces += solvent_force
 
+            self.results["forces"] = forces.detach().cpu().numpy()
+            
         if "hessian" in properties:
+            if self.solvent_correction:
+                raise NotImplementedError("Hessian calculation with implicit solvent is not implemented yet.")
             self.results["hessian"] = self.get_hessian(atoms)
 
     # ------------------------ get_energy ------------------------

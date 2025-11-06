@@ -74,3 +74,45 @@ class CalcABC(ase.calculators.calculator.Calculator):
         forces = -grad_vec
 
         return hvp, forces, energy
+
+    def implicit_solv_init(self, implicit: str, solvent: str):
+
+        if implicit == "gbsa" and solvent != 'none':
+
+            # GBSA solvent correction and QEq charge calculator
+            from .extra_correction import GBSA
+            from .extra_correction import QEqTorch
+
+            self.solvent_correction = GBSA(solvent=solvent, device=self.device)
+        
+            self.chargecalc = QEqTorch(device=self.device)
+        else:
+            self.solvent_correction = None
+    
+    def implicit_solv_energy(self, atoms: ase.Atoms) -> torch.Tensor:
+        """
+        Compute implicit solvent correction energy if applicable.
+
+        Args:
+            atoms (ase.Atoms): Atomic structure.
+
+        Returns:
+            torch.Tensor: Implicit solvent correction energy in Hartree.
+        """
+        atoms.atomic_charges = self.chargecalc(atoms)
+        solvent_energy,_ = self.solvent_correction.get_energy(atoms)
+        return solvent_energy
+
+    def implicit_solv_energy_and_force(self, atoms: ase.Atoms) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute implicit solvent correction energy and forces if applicable.
+
+        Args:
+            atoms (ase.Atoms): Atomic structure.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Implicit solvent correction energy in Hartree and forces in Hartree/Å.
+        """
+        atoms.atomic_charges = self.chargecalc(atoms)
+        solvent_energy, solvent_forces = self.solvent_correction.get_energy_and_force(atoms)
+        return solvent_energy, solvent_forces

@@ -1,41 +1,55 @@
+#!/usr/bin/env python3
 import re
+import sys
+
+# 能匹配元素符号 + 3 个坐标，坐标支持科学计数法
+LINE_RE = re.compile(
+    r"\s*\d+\s+([A-Za-z][A-Za-z0-9]*)\s+"
+    r"([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+"
+    r"([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s+"
+    r"([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+)
+
+def write_frame(out, frame_idx, atoms):
+    """按 XYZ 写一帧"""
+    if not atoms:
+        return
+    out.write(f"{len(atoms)}\n")
+    out.write(f"Frame {frame_idx}\n")
+    for el, x, y, z in atoms:
+        out.write(f"{el}   {x}   {y}   {z}\n")
 
 def process_coordinates(file_path, output_path):
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
+    frame_idx = 0
+    in_block = False
+    atoms_this_frame = []
 
-    atom_count = 0
-    frame_num = 1
-    coordinates = []
-    recording = False
-    frame_data = ""  # 初始化帧数据
+    with open(file_path, "r") as fin, open(output_path, "w") as fout:
+        for line in fin:
+            if "Coordinates" in line:
+                # 进入新帧前把上一帧写出去
+                if in_block:
+                    frame_idx += 1
+                    write_frame(fout, frame_idx, atoms_this_frame)
+                    atoms_this_frame = []
+                in_block = True
+                continue
 
-    for line in lines:
-        # 检查是否遇到“Coordinates”标识符
-        if "Coordinates" in line:
-            if recording:  # 如果正在记录，则保存上一帧
-                coordinates.append(f"{atom_count}\nFrame {frame_num}: {frame_num}\n" + frame_data)
-                frame_num += 1
-            recording = True
-            frame_data = ""  # 初始化新的帧数据
-        elif recording:
-            match = re.match(r'\s*\d+\s+(\w+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)', line)
-            if match:
-                if frame_num == 1:
-                    atom_count += 1  # 只在第一帧计算原子数
-                element = match.group(1)
-                x = match.group(2)
-                y = match.group(3)
-                z = match.group(4)
-                frame_data += f"{element}   {x}   {y}   {z}\n"
+            if in_block:
+                m = LINE_RE.match(line)
+                if m:
+                    el, x, y, z = m.groups()
+                    atoms_this_frame.append((el, x, y, z))
+                # 若遇到非匹配行且已在 block，可选择忽略或判断 block 结束
+                # 这里选择忽略，直到下一次遇到 "Coordinates"
 
-    # 保存最后一帧
-    if recording and frame_data:
-        coordinates.append(f"{atom_count}\nFrame {frame_num}: {frame_num}\n" + frame_data)
+        # 文件结束，收尾写最后一帧
+        if in_block and atoms_this_frame:
+            frame_idx += 1
+            write_frame(fout, frame_idx, atoms_this_frame)
 
-    # 将结果写入输出文件
-    with open(output_path, 'w') as out_file:
-        out_file.writelines(coordinates)
-
-# 使用示例
-process_coordinates('constrain_input.out', 'constrain_input.xyz')
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python script.py input.out output.xyz")
+        sys.exit(1)
+    process_coordinates(sys.argv[1], sys.argv[2])
