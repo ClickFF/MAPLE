@@ -15,6 +15,7 @@ class TransitionState(JobABC):
         self.method= method
 
     def run(self):
+
         if self.method is None:
             raise ValueError('Method is not provided.')
 

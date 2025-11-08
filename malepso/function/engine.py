@@ -77,7 +77,7 @@ class engine():
         self.commandcontrol = reader.command_control
         
         # Explicit Solvation Treatment
-        if self.commandcontrol.get('solv', None).get('explicit', None) is not None:
+        if self.commandcontrol.get('solv', {}).get('explicit', None) is not None:
 
             from .read import ExplicitSolv
             self.atoms = ExplicitSolv(self.atoms, params=self.commandcontrol.get('solv'), 
@@ -96,8 +96,8 @@ class engine():
         
         from .calculator import SetClaculator
 
-        implicit_method = self.commandcontrol.get('solv', None).get('method', None)
-        solvent = self.commandcontrol.get('solv', None).get('implicit', None)
+        implicit_method = self.commandcontrol.get('solv', {}).get('method', None)
+        solvent = self.commandcontrol.get('solv', {}).get('implicit', None)
 
         setcalculator = SetClaculator(device, model, self.output, 
                         d4=self.d4, implicit=implicit_method, solvent=solvent)

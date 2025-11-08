@@ -72,7 +72,7 @@ class Dispatcher():
                 elif commandcontrol.params.get('method') in ['prfo', 'newton']:
                     raise NotImplementedError('For transition state search job, only one Atoms object is allowed for PRFO or Newton method.')
 
-            ts = TransitionState(output=output, atoms=atoms, params=commandcontrol.params)
+            ts = TransitionState(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
             ts.run()
         
         elif jobtype == 'irc':
