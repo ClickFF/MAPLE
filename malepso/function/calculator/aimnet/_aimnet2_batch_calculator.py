@@ -1,43 +1,52 @@
 # -*- coding: utf-8 -*-
 import torch
-import numpy as np
+from typing import List
 from ase import Atoms
-from typing import List, Dict, Any
+import numpy as np
 
-from ..calculator_base import CalcBatchABC
+# 单位换算常量
+EH2EV = 27.211386245988  # 1 Ha = 27.211386... eV
 
-# 单位换算：1 Hartree = 27.211386245988 eV
-EH2EV = 27.211386245988
 
 # ---------------- helpers ----------------
+# 正确的 pad_dim0（保持 64 精度，由 a.dtype 决定）
 def pad_dim0(a: torch.Tensor, value=0) -> torch.Tensor:
-    pad_shape = list(a.shape)
-    pad_shape[0] = 1
+    pad_shape = list(a.shape); pad_shape[0] = 1
     pad_row = torch.full(pad_shape, value, dtype=a.dtype, device=a.device)
     return torch.cat([a, pad_row], dim=0)
 
+
 def nblist_dense_padded_multi(coord: torch.Tensor, mol_idx: torch.Tensor, cutoff: float) -> torch.Tensor:
-    """邻居表 (N+1, M)。仅同一分子内建边；最后一行 sentinel = N。"""
+    """
+    稳定邻居表 (N+1, M)。仅同一分子内建边；最后一行 sentinel = N。
+    邻居按距离排序；M=每原子最大度。
+    """
     device = coord.device
+    dtype  = coord.dtype
     N = coord.shape[0]
     if N == 0:
         return torch.full((1, 1), 0, dtype=torch.int64, device=device)
 
     diff  = coord[:, None, :] - coord[None, :, :]
-    dist2 = (diff * diff).sum(dim=-1)
-    same  = (mol_idx[:, None] == mol_idx[None, :])
+    dist2 = (diff * diff).sum(dim=-1)                  # (N,N) dtype
+    same  = (mol_idx[:, None] == mol_idx[None, :])     # (N,N) bool
     eye   = torch.eye(N, dtype=torch.bool, device=device)
-    mask  = (dist2 <= cutoff * cutoff) & same & (~eye)
+    mask  = (dist2 <= cutoff * cutoff) & same & (~eye) # (N,N)
 
-    deg = mask.sum(dim=1)
+    deg = mask.sum(dim=1)                              # (N,)
     M   = int(max(int(deg.max().item()), 1))
 
-    nbmat = torch.full((N + 1, M), N, dtype=torch.int64, device=device)  # sentinel = N
+    # 距离排序，非邻居设置为大数
+    big = torch.finfo(dtype).max / 4.0
+    sort_key = torch.where(mask, dist2, dist2.new_full(dist2.shape, big))
+    order = torch.argsort(sort_key, dim=1, stable=True)  # (N,N)
+
+    nbmat = torch.full((N + 1, M), N, dtype=torch.int64, device=device)
     for i in range(N):
-        nei = torch.nonzero(mask[i], as_tuple=False).flatten()
-        k = min(nei.numel(), M)
-        if k > 0:
-            nbmat[i, :k] = nei[:k].to(torch.int64)
+        ki = int(deg[i].item())
+        if ki > 0:
+            k = min(ki, M)
+            nbmat[i, :k] = order[i, :k]
     return nbmat
 
 def _ptr_from_atoms(atoms_list: List[Atoms], device) -> torch.Tensor:
@@ -46,198 +55,302 @@ def _ptr_from_atoms(atoms_list: List[Atoms], device) -> torch.Tensor:
         ptr.append(ptr[-1] + len(at))
     return torch.tensor(ptr, dtype=torch.long, device=device)
 
-def _build_flat_inputs(atoms_list: List[Atoms], device) -> Dict[str, torch.Tensor]:
-    coords_list, numbers_list, molidx_list = [], [], []
-    for i, atoms in enumerate(atoms_list):
-        # 前向用 float32；后续对外统一转 float64
-        pos = torch.tensor(atoms.get_positions(), dtype=torch.float32, device=device)
-        Z   = torch.tensor(atoms.get_atomic_numbers(), dtype=torch.int64,  device=device)
-        n   = pos.shape[0]
-        coords_list.append(pos)
-        numbers_list.append(Z)
-        molidx_list.append(torch.full((n,), i, dtype=torch.int64, device=device))
-    if len(coords_list) == 0:
-        coord   = torch.zeros((0, 3), dtype=torch.float32, device=device)
-        numbers = torch.zeros((0,),    dtype=torch.int64,  device=device)
-        mol_idx = torch.zeros((0,),    dtype=torch.int64,  device=device)
-    else:
-        coord   = torch.cat(coords_list, dim=0)
-        numbers = torch.cat(numbers_list, dim=0)
-        mol_idx = torch.cat(molidx_list, dim=0)
-    return {"coord": coord, "numbers": numbers, "mol_idx": mol_idx}
 
-# ---------------- batch calculator ----------------
-class AIMNet2BatchCalc(CalcBatchABC):
+# ---------------- main calculator ----------------
+class AIMNet2BatchCalc:
     """
-    返回（单位统一为 Hartree / Å）：
-      get_forces_and_energy -> (E[B], F[B, 3*Nmax])
-      get_efh               -> (E[B], F[B, 3*Nmax], H[B, 3*Nmax, 3*Nmax], P[B])
-        其中 H 为 Hartree/Å²，P 为“按原子数的 padding”：P[i] = Nmax_atoms - n_atoms(i)
+    AIMNet2 批量计算器（GPU 常驻，dtype 可控，默认 float64）
+    - prepare() 仅一次从 ASE 读拓扑与首帧坐标，缓存到 GPU
+    - 坐标缓冲 self.coord: (N,3) [dtype] on GPU，Å
+    - 接口：
+        set_coords_(coord) / step_cart_(s_cart) / backup_coords / restore_coords
+        get_ef_gpu() / get_efh_gpu()
+        ef_from_coords(coord) / efh_from_coords(coord)
+    - 返回单位：E Ha，F Ha/Å，H Ha/Å^2，P 每分子 padding 原子数
     """
 
-    def __init__(self, model_path: str, device="cpu", cutoff: float = 5.0):
-        super().__init__()
+    def __init__(self, model_path: str, device: str = "cuda", cutoff: float = 5.0, dtype: torch.dtype = torch.float64):
         self.device = torch.device(device)
+        self.dtype  = dtype               # 全局数据类型控制点
         self.model  = torch.jit.load(model_path, map_location=self.device).eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
         self.cutoff = float(cutoff)
 
-    def build_batch_data(self, atoms_list: List[Atoms]) -> Dict[str, torch.Tensor]:
-        flat = _build_flat_inputs(atoms_list, self.device)
-        coord, numbers, mol_idx = flat["coord"], flat["numbers"], flat["mol_idx"]
-        ptr = _ptr_from_atoms(atoms_list, self.device)
-        return {"coord": coord, "numbers": numbers, "mol_idx": mol_idx, "ptr": ptr}
+        # 缓存（prepare 后有效）
+        self._prepared    = False
+        self._atoms_B     = 0
+        self._ptr         = None      # (B+1,)
+        self.numbers      = None      # (N,) int64
+        self.mol_idx      = None      # (N,) int64
+        self.coord        = None      # (N,3) dtype on GPU
+        self.N_atoms      = 0
+        self.Nmax_atoms   = 0
+        self.nmax_dof     = 0
+        self.sentinel_mol = 0
+        self.charge       = None      # (B+1,) dtype
 
-    # -------- E + F --------
-    def get_forces_and_energy(self, atoms_list):
-        B = len(atoms_list)
-        if B == 0:
-            E = torch.zeros((0,),   dtype=torch.float64, device=self.device)
-            F = torch.zeros((0, 0), dtype=torch.float64, device=self.device)
-            return E, F
+        self._coord_backup = None
 
-        data_all = self.build_batch_data(atoms_list)
-        coord32 = data_all["coord"].clone().detach().requires_grad_(True)  # float32 for model
-        numbers = data_all["numbers"]
-        mol_idx = data_all["mol_idx"]
-        ptr     = data_all["ptr"]
+    # ---------- 一次性准备：仅首帧需要 ----------
+    def prepare(self, atoms_list: List[Atoms]):
+        device, dtype = self.device, self.dtype
+        self._atoms_B = len(atoms_list)
+        self._ptr     = _ptr_from_atoms(atoms_list, device)  # (B+1,)
 
-        N = coord32.shape[0]
-        nbmat = nblist_dense_padded_multi(coord32, mol_idx, self.cutoff)
-        sentinel_mol = (mol_idx.max().item() + 1) if N > 0 else 0
-        charge = torch.zeros(B + 1, dtype=torch.float32, device=self.device)  # 每分子 + 哨兵
+        # 常量拓扑
+        nums, mids = [], []
+        for i, at in enumerate(atoms_list):
+            Z = torch.tensor(at.get_atomic_numbers(), dtype=torch.int64, device=device)
+            n = Z.shape[0]
+            nums.append(Z)
+            mids.append(torch.full((n,), i, dtype=torch.int64, device=device))
+        self.numbers = torch.cat(nums, dim=0) if nums else torch.zeros((0,), dtype=torch.int64, device=device)
+        self.mol_idx = torch.cat(mids, dim=0) if mids else torch.zeros((0,), dtype=torch.int64, device=device)
 
-        data = {
-            "coord":    pad_dim0(coord32, 0.0),
-            "numbers":  pad_dim0(numbers, 0).to(torch.int64),
-            "charge":   charge,
-            "mol_idx":  pad_dim0(mol_idx, sentinel_mol).to(torch.int64),
-            "nbmat":    nbmat,
-            "nbmat_lr": nbmat,
-        }
+        # 尺寸
+        self.N_atoms     = int(self.numbers.numel())
+        self.Nmax_atoms  = int(max((len(at) for at in atoms_list), default=0))
+        self.nmax_dof    = 3 * self.Nmax_atoms
 
-        with torch.jit.optimized_execution(False):
-            out = self.model(data)
-
-        # 能量（模型输出 eV/分子或 eV/原子）。统一聚合到 eV/分子。
-        e_vec = out["energy"].to(torch.float32).reshape(-1)
-        if e_vec.numel() == N + 1 or e_vec.numel() == B + 1:
-            e_vec = e_vec[:-1]
-        elif e_vec.numel() not in (N, B):
-            raise RuntimeError(f"Unexpected energy shape: {tuple(e_vec.shape)}")
-
-        if e_vec.numel() != B:
-            # per-atom -> per-molecule
-            E_eV = torch.empty((B,), dtype=torch.float32, device=self.device)
-            ptr_cpu = ptr.detach().cpu().numpy()
-            for i in range(B):
-                s, t = ptr_cpu[i], ptr_cpu[i + 1]
-                E_eV[i] = e_vec[s:t].sum()
+        # 坐标缓冲（GPU，统一 dtype）
+        if self.N_atoms > 0:
+            pos_list = [torch.tensor(at.get_positions(), dtype=dtype) for at in atoms_list]
+            coord0   = torch.cat(pos_list, dim=0)  # (N,3)
         else:
-            E_eV = e_vec  # (B,)
+            coord0   = torch.zeros((0, 3), dtype=dtype)
+        self.coord = coord0.to(device, non_blocking=True).contiguous()
 
-        # 力：eV/Å
-        grad32 = torch.autograd.grad(E_eV.sum(), coord32, create_graph=False, retain_graph=False)[0]
-        F_all_eV = -grad32  # (N,3)
+        # 其它常量
+        self.sentinel_mol = (int(self.mol_idx.max().item()) + 1) if self.N_atoms > 0 else 0
+        self.charge       = torch.zeros(self._atoms_B + 1, dtype=dtype, device=device)
 
-        # padding 到每批 3*Nmax
-        Nmax_atoms = int(max(len(at) for at in atoms_list)) if B > 0 else 0
-        nmax = 3 * Nmax_atoms
-        F_eV = torch.zeros((B, nmax), dtype=torch.float32, device=self.device)
-        ptr_cpu = ptr.detach().cpu().numpy()
+        self._coord_backup = None
+        self._prepared     = True
+
+    # ---------- 坐标管理，全在 GPU ----------
+    @torch.no_grad()
+    def set_coords_(self, coord: torch.Tensor):
+        """覆盖内部坐标。coord: (N,3)，任意设备/精度，将复制到 GPU 并转为全局 dtype。"""
+        assert self._prepared, "call prepare() first"
+        assert coord.shape == (self.N_atoms, 3)
+        self.coord.copy_(coord.to(self.device, dtype=self.dtype))
+
+    @torch.no_grad()
+    def step_cart_(self, s_cart: torch.Tensor):
+        """按批量位移更新坐标。s_cart: (B, 3*Nmax) Å。"""
+        assert self._prepared, "call prepare() first"
+        B = self._atoms_B
+        assert s_cart.shape == (B, self.nmax_dof)
+        s_cart = s_cart.to(self.device, dtype=self.dtype)
+        s = self._ptr[:-1]
+        t = self._ptr[1:]
         for i in range(B):
-            s, t = ptr_cpu[i], ptr_cpu[i + 1]
-            Fi = F_all_eV[s:t, :].reshape(-1)
-            F_eV[i, :Fi.numel()] = Fi
+            ni = int((t[i] - s[i]).item())
+            if ni > 0:
+                self.coord[s[i]:t[i], :].add_(s_cart[i, :3*ni].reshape(ni, 3))
 
-        # 转 Ha、Ha/Å（升为 float64）
-        E = (E_eV / EH2EV).to(torch.float64)
-        F = (F_eV / EH2EV).to(torch.float64)
-        return E, F
+    @torch.no_grad()
+    def backup_coords(self):
+        if self._prepared:
+            self._coord_backup = self.coord.clone()
 
-    # -------- E + F + H + P --------
-    def get_efh(self, atoms_list):
-        B = len(atoms_list)
-        if B == 0:
-            E = torch.zeros((0,),   dtype=torch.float64, device=self.device)
-            F = torch.zeros((0, 0), dtype=torch.float64, device=self.device)
-            H = torch.zeros((0, 0, 0), dtype=torch.float64, device=self.device)
-            P = torch.zeros((0,),   dtype=torch.int64,   device=self.device)
-            return E, F, H, P
+    @torch.no_grad()
+    def restore_coords(self):
+        if self._coord_backup is not None:
+            self.coord.copy_(self._coord_backup)
+            self._coord_backup = None
 
-        data_all = self.build_batch_data(atoms_list)
-        coord32 = data_all["coord"].clone().detach().requires_grad_(True)  # float32
-        numbers = data_all["numbers"]
-        mol_idx = data_all["mol_idx"]
-        ptr     = data_all["ptr"]
+    # ---------- 内部公共前向 ----------
+    def _forward_energy_forces_(self, c: torch.Tensor, need_graph: bool):
+        """
+        c: (N,3) [dtype, GPU]
+        返回:
+          E_eV:      (B,)  eV/分子（保持对 c 的梯度）
+          F_all_eV:  (N,3) eV/Å
+          coord_leaf:      作为叶子变量的坐标（供二阶继续用）
+        """
+        assert self._prepared, "call prepare() first"
+        device, dtype = self.device, self.dtype
+        B = self._atoms_B
+        N = self.N_atoms
 
-        N = coord32.shape[0]
-        nbmat = nblist_dense_padded_multi(coord32, mol_idx, self.cutoff)
-        sentinel_mol = (mol_idx.max().item() + 1) if N > 0 else 0
-        charge = torch.zeros(B + 1, dtype=torch.float32, device=self.device)
+        # 叶子变量
+        coord_leaf = c.detach().to(device=device, dtype=dtype).requires_grad_(True)
 
-        Nmax_atoms = int(max(len(at) for at in atoms_list)) if B > 0 else 0
-        nmax = 3 * Nmax_atoms
-        P_atoms = torch.empty((B,), dtype=torch.int64, device=self.device)  # 按原子数的 padding
+        # 邻表（同 dtype）
+        nbmat = nblist_dense_padded_multi(coord_leaf, self.mol_idx, self.cutoff)
 
+        # 打包模型输入：
+        # 注意：这里严格使用全局 dtype，把 charge、coord、nb 等统一 dtype/int。
         data = {
-            "coord":    pad_dim0(coord32, 0.0),
-            "numbers":  pad_dim0(numbers, 0).to(torch.int64),
-            "charge":   charge,
-            "mol_idx":  pad_dim0(mol_idx, sentinel_mol).to(torch.int64),
+            "coord":    pad_dim0(coord_leaf, 0.0),                     # (N+1,3) float64
+            "numbers":  pad_dim0(self.numbers, 0).to(torch.int64),     # (N+1,)
+            "charge":   self.charge,                                    # (B+1,)
+            "mol_idx":  pad_dim0(self.mol_idx, self.sentinel_mol).to(torch.int64),
             "nbmat":    nbmat,
             "nbmat_lr": nbmat,
         }
 
+        # 前向
         with torch.jit.optimized_execution(False):
             out = self.model(data)
 
-        # 能量：eV
-        e_vec = out["energy"].to(torch.float32).reshape(-1)
+        # 能量向量，转全局 dtype
+        e_vec = out["energy"].to(dtype).reshape(-1)
         if e_vec.numel() == N + 1 or e_vec.numel() == B + 1:
             e_vec = e_vec[:-1]
-        elif e_vec.numel() not in (N, B):
+
+        if e_vec.numel() == B:
+            E_eV = e_vec
+        elif e_vec.numel() == N:
+            E_eV = torch.bincount(self.mol_idx, weights=e_vec, minlength=B).to(dtype)
+        else:
             raise RuntimeError(f"Unexpected energy shape {tuple(e_vec.shape)}")
 
-        if e_vec.numel() != B:
-            E_eV = torch.empty((B,), dtype=torch.float32, device=self.device)
-            ptr_cpu = ptr.detach().cpu().numpy()
-            for i in range(B):
-                s, t = ptr_cpu[i], ptr_cpu[i + 1]
-                E_eV[i] = e_vec[s:t].sum()
-        else:
-            E_eV = e_vec
+        # 一阶力
+        grad = torch.autograd.grad(E_eV.sum(), coord_leaf,
+                                   create_graph=need_graph, retain_graph=need_graph)[0]
+        F_all_eV = -grad  # (N,3), dtype
 
-        # 力：eV/Å（保留计算图以便二阶）
-        grad32 = torch.autograd.grad(E_eV.sum(), coord32, create_graph=True, retain_graph=True)[0]
-        F_all_eV = -grad32  # (N,3)
+        return E_eV, F_all_eV, coord_leaf
 
-        # Hessian：eV/Å²，按全局打平坐标求二阶，再拆分为分子块
-        f_flat = F_all_eV.reshape(-1)    # 长度 3N
+    # ---------- 计算接口：使用内部坐标 ----------
+    def get_ef_gpu(self):
+        """
+        返回：
+          E: (B,)        Ha
+          F: (B,3*Nmax)  Ha/Å
+        """
+        B = self._atoms_B
+        device, dtype = self.device, self.dtype
+        if B == 0:
+            E = torch.zeros((0,), dtype=dtype, device=device)
+            F = torch.zeros((0, 0), dtype=dtype, device=device)
+            return E, F
+
+        E_eV, F_all_eV, _ = self._forward_energy_forces_(self.coord, need_graph=False)
+
+        # 装配到 (B, 3*Nmax)
+        nmax = self.nmax_dof
+        F_eV = torch.zeros((B, nmax), dtype=dtype, device=device)
+        s = self._ptr[:-1]
+        t = self._ptr[1:]
+        for i in range(B):
+            ni = int((t[i] - s[i]).item())
+            if ni > 0:
+                F_eV[i, :3*ni] = F_all_eV[s[i]:t[i], :].reshape(-1)
+
+        # eV -> Ha
+        E = (E_eV / EH2EV)
+        F = (F_eV / EH2EV)
+        return E, F
+
+    def get_efh_gpu(self):
+        """
+        返回：
+          E: (B,)                 Ha
+          F: (B, 3*Nmax)         Ha/Å
+          H: (B, 3*Nmax,3*Nmax)  Ha/Å²
+          P: (B,)                每分子 padding 原子数
+        """
+        B = self._atoms_B
+        device, dtype = self.device, self.dtype
+        if B == 0:
+            E = torch.zeros((0,),   dtype=dtype, device=device)
+            F = torch.zeros((0, 0), dtype=dtype, device=device)
+            H = torch.zeros((0, 0, 0), dtype=dtype, device=device)
+            P = torch.zeros((0,),   dtype=torch.int64, device=device)
+            return E, F, H, P
+
+        # 一阶
+        E_eV, F_all_eV, coord_leaf = self._forward_energy_forces_(self.coord, need_graph=True)
+
+        # 二阶：全局 Hessian（eV/Å²）
+        f_flat = F_all_eV.reshape(-1)
         cols = []
         for k in range(f_flat.numel()):
-            g2 = torch.autograd.grad(f_flat[k], coord32, retain_graph=True, create_graph=False)[0]
+            g2 = torch.autograd.grad(f_flat[k], coord_leaf, retain_graph=True, create_graph=False)[0]
             cols.append(g2.reshape(-1))
-        H_global_eV = -torch.stack(cols, dim=1)  # (3N, 3N)
-        # 数值对称化
+        H_global_eV = -torch.stack(cols, dim=1)  # (3N,3N)
         H_global_eV = 0.5 * (H_global_eV + H_global_eV.transpose(0, 1))
 
-        # 拆块 + padding；P 为按原子数的 padding
-        F_eV = torch.zeros((B, nmax), dtype=torch.float32, device=self.device)
-        H_eV = torch.zeros((B, nmax, nmax), dtype=torch.float32, device=self.device)
-        ptr_cpu = ptr.detach().cpu().numpy()
+        # 分块 + padding + P
+        nmax = self.nmax_dof
+        F_eV = torch.zeros((B, nmax), dtype=dtype, device=device)
+        H_eV = torch.zeros((B, nmax, nmax), dtype=dtype, device=device)
+        P    = torch.empty((B,), dtype=torch.int64, device=device)
+
+        s = self._ptr[:-1]
+        t = self._ptr[1:]
         for i in range(B):
-            s, t = ptr_cpu[i], ptr_cpu[i + 1]
-            ni = t - s                 # 原子数
+            ni  = int((t[i] - s[i]).item())
             dof = 3 * ni
-            P_atoms[i] = Nmax_atoms - ni
+            P[i] = self.Nmax_atoms - ni
+            if dof > 0:
+                F_eV[i, :dof]       = F_all_eV[s[i]:t[i], :].reshape(-1)
+                H_eV[i, :dof, :dof] = H_global_eV[3*s[i]:3*t[i], 3*s[i]:3*t[i]]
 
-            F_eV[i, :dof] = F_all_eV[s:t, :].reshape(-1)
-            H_eV[i, :dof, :dof] = H_global_eV[3*s:3*t, 3*s:3*t]
+        # eV -> Ha
+        E = (E_eV / EH2EV)
+        F = (F_eV / EH2EV)
+        H = (H_eV / EH2EV)
+        return E, F, H, P
 
-        # 统一转 Ha、Ha/Å、Ha/Å²（升为 float64）
-        E = (E_eV / EH2EV).to(torch.float64)       # Hartree
-        F = (F_eV / EH2EV).to(torch.float64)       # Hartree/Å
-        H = (H_eV / EH2EV).to(torch.float64)       # Hartree/Å²
-        return E, F, H, P_atoms
+    # ---------- 计算接口：传入坐标但不改内部状态 ----------
+    def ef_from_coords(self, coord: torch.Tensor):
+        """用外部坐标计算 E/F，不写回内部缓存。"""
+        assert self._prepared, "call prepare() first"
+        device, dtype = self.device, self.dtype
+        coord = coord.to(device, dtype=dtype)
+
+        E_eV, F_all_eV, _ = self._forward_energy_forces_(coord, need_graph=False)
+
+        B, nmax = self._atoms_B, self.nmax_dof
+        F_eV = torch.zeros((B, nmax), dtype=dtype, device=device)
+        s = self._ptr[:-1]
+        t = self._ptr[1:]
+        for i in range(B):
+            ni = int((t[i] - s[i]).item())
+            if ni > 0:
+                F_eV[i, :3*ni] = F_all_eV[s[i]:t[i], :].reshape(-1)
+
+        E = (E_eV / dtype(EH2EV))
+        F = (F_eV / dtype(EH2EV))
+        return E, F
+
+    def efh_from_coords(self, coord: torch.Tensor):
+        """用外部坐标计算 E/F/H/P，不写回内部缓存。"""
+        assert self._prepared, "call prepare() first"
+        device, dtype = self.device, self.dtype
+        coord = coord.to(device, dtype=dtype)
+
+        E_eV, F_all_eV, coord_leaf = self._forward_energy_forces_(coord, need_graph=True)
+
+        f_flat = F_all_eV.reshape(-1)
+        cols = []
+        for k in range(f_flat.numel()):
+            g2 = torch.autograd.grad(f_flat[k], coord_leaf, retain_graph=True, create_graph=False)[0]
+            cols.append(g2.reshape(-1))
+        H_global_eV = -torch.stack(cols, dim=1)
+        H_global_eV = 0.5 * (H_global_eV + H_global_eV.transpose(0, 1))
+
+        B, nmax = self._atoms_B, self.nmax_dof
+        F_eV = torch.zeros((B, nmax), dtype=dtype, device=device)
+        H_eV = torch.zeros((B, nmax, nmax), dtype=dtype, device=device)
+        P    = torch.empty((B,), dtype=torch.int64, device=device)
+
+        s = self._ptr[:-1]
+        t = self._ptr[1:]
+        for i in range(B):
+            ni  = int((t[i] - s[i]).item())
+            dof = 3 * ni
+            P[i] = self.Nmax_atoms - ni
+            if dof > 0:
+                F_eV[i, :dof]       = F_all_eV[s[i]:t[i], :].reshape(-1)
+                H_eV[i, :dof, :dof] = H_global_eV[3*s[i]:3*t[i], 3*s[i]:3*t[i]]
+
+        E = (E_eV / EH2EV)
+        F = (F_eV / EH2EV)
+        H = (H_eV / EH2EV)
+        return E, F, H, P
