@@ -1,0 +1,7 @@
+#model=ANI-1xnr
+#freq(method=mw, ilow=2, temperature=310, verbosity=3, treat_imag_as_real=true, pressure_kpa=300)
+#device=gpu0
+
+XYZ C:\Users\18526\MaLePSO\example\freq\mw\inp1_nebts_ts.xyz
+
+
