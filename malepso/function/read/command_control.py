@@ -27,15 +27,7 @@ class CommandControl:
         "opt": {"method": "lbfgs", "maxiter": 200, "convergence": 1e-5},
         "ts": {"method": "prfo", "maxiter": 200, "neb_images": 7, "level": "medium", "refine": None},
         "scan": {"method": "lbfgs"},
-        "freq": {"method": "mw", "temperature": 298.15},
-        "solv": {"solvent": "water", "explicit": None},
-    }
-
-    IMPLEMENTATION_MAP = {
-        "opt": {"lbfgs", "rfo", "cg", ""},
-        "scan": {"lbfgs", "cg"},
-        "ts": {"prfo", "string", "neb", "dimer"},
-         "freq": {
+        "freq": {
             "method": "mw",
             "temperature": 298.15,
             "pressure_kpa": 101.325,
@@ -44,6 +36,14 @@ class CommandControl:
             "treat_imag_as_real": False,
             "device": "cpu",
         },
+        "solv": {"solvent": "water", "explicit": None},
+    }
+
+    IMPLEMENTATION_MAP = {
+        "opt": {"lbfgs", "rfo", "cg", ""},
+        "scan": {"lbfgs", "cg"},
+        "ts": {"prfo", "string", "neb", "dimer"},
+        "freq": {"mw", "nonmw", "both"},
         "sp": set(),
         "irc": {"gs"},
     }
