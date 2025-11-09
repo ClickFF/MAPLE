@@ -35,7 +35,15 @@ class CommandControl:
         "opt": {"lbfgs", "rfo", "cg", ""},
         "scan": {"lbfgs", "cg"},
         "ts": {"prfo", "string", "neb", "dimer"},
-        "freq": {"mw", "nonmw", "both"},
+         "freq": {
+            "method": "mw",
+            "temperature": 298.15,
+            "pressure_kpa": 101.325,
+            "ilowfreq": 2,
+            "verbosity": 1,
+            "treat_imag_as_real": False,
+            "device": "cpu",
+        },
         "sp": set(),
         "irc": {"gs"},
     }
