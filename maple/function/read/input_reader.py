@@ -200,6 +200,19 @@ class InputReader():
                     atoms_or_list = processed_list
                 else:
                     atoms_or_list = self.post_processing_command(expanded_post_processing, atoms_or_list)
+        # =========================================================
+        # [Fix] Inject global settings into atoms.info to avoid warnings
+        # =========================================================
+        # Ensure 'task', 'charge', 'spin', 'model' etc. are passed to the Atoms object
+        if hasattr(self, 'command_control'):
+            global_settings = self.command_control.as_dict()
+            
+            if isinstance(atoms_or_list, list):
+                for at in atoms_or_list:
+                    at.info.update(global_settings)
+            else:
+                atoms_or_list.info.update(global_settings)
+        # =========================================================
 
         # Return Atoms if single structure, Molecules if multiple
         if isinstance(atoms_or_list, list):
