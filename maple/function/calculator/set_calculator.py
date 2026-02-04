@@ -22,6 +22,8 @@ IMPLEMENTATION_MODELs = [
             'uma',
             'maceomol',
             'aimnet2nse',
+            'dpa3',
+            'chgnet',
         ]
 
 # Model name to filename mapping for HuggingFace download
@@ -144,6 +146,14 @@ class SetClaculator():
             elif self.model in ['maceomol']:
                 from .mace._mace_general_calculator import MACEModelCalculator
                 calculator = MACEModelCalculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
+                return calculator
+            elif self.model == 'dpa3':
+                from .deepmd._dpa3_calculator import DPA3Calculator
+                calculator = DPA3Calculator(model=self.model, device=self.device, implicit=self.implicit, solvent=self.solvent)
+                return calculator
+            elif self.model == 'chgnet':
+                from .chgnet._chgnet_calculator import CHGNetCalc
+                calculator = CHGNetCalc(model=self.model, device=self.device, implicit=self.implicit, solvent=self.solvent)
                 return calculator
             else:
                 raise ValueError(f"Model '{self.model}' is not implemented yet.")
