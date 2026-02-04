@@ -14,7 +14,7 @@ class CommandControl:
         "ani2x", "ani1x", "ani1ccx", "ani1xnr",
         "maceoff23s", "maceoff23m", "maceoff23l",
         "egret", "aimnet2", "uma", "maceomol", "aimnet2nse",
-        "dpa3",
+        "dpa3", "chgnet",
     }
 
     SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc"}
