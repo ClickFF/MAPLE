@@ -105,6 +105,9 @@ class InputReader():
             def is_settings_line(s: str) -> bool:
                 return s.lstrip().startswith('#')
 
+            # Regex for charge/multiplicity line: two integers (e.g. "0 1", "-1 2")
+            charge_mult_re = re.compile(r'^\s*[+-]?\d+\s+\d+\s*$')
+
             def is_xyz_ref(s: str) -> bool:
                 upper = s.upper()
                 return (upper.startswith('XYZ ') or upper.startswith('XYZTRAJ ')) and len(s.split(maxsplit=1)) == 2
@@ -113,6 +116,8 @@ class InputReader():
                 if s == '' or s == '&':
                     return True
                 if is_xyz_ref(s):
+                    return True
+                if charge_mult_re.match(s):
                     return True
                 return atom_line_re.match(s) is not None
 
@@ -472,12 +477,10 @@ class InputReader():
                 # Create Atoms object
                 atoms = Atoms(symbols=elements, positions=np.array(coords, dtype=np.float64))
 
-                # Store charge and multiplicity if provided
-                if charge is not None:
-                    atoms.info['charge'] = charge
-                if mult is not None:
-                    atoms.info['mult'] = mult
-                    atoms.info['spin'] = (mult - 1) / 2
+                # Store charge and multiplicity (default to neutral singlet if not specified)
+                atoms.info['charge'] = charge if charge is not None else 0
+                atoms.info['mult']   = mult   if mult   is not None else 1
+                atoms.info['spin']   = (atoms.info['mult'] - 1) / 2
 
                 atoms_list.append(atoms)
 
