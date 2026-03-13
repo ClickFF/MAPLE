@@ -40,12 +40,12 @@ class CommandControl:
     }
 
     IMPLEMENTATION_MAP = {
-        "opt": {"lbfgs", "rfo", "sd", "cg", "sdcg", ""},
+        "opt":  {"lbfgs", "rfo", "sd", "cg", "sdcg", ""},
         "scan": {"lbfgs", "cg"},
-        "ts": {"prfo", "string", "neb", "dimer", "autoneb",},
+        "ts":   {"prfo", "string", "neb", "dimer", "autoneb"},
         "freq": {"mw", "nonmw", "both"},
-        "sp": set(),
-        "irc": {"gs", "hpc", "eulerpc","lqa"},
+        "sp":   set(),
+        "irc":  {"gs", "hpc", "eulerpc", "lqa"},
     }
 
     def __init__(self, params: Dict[str, Any], task: str, output_path: Optional[str] = None):
