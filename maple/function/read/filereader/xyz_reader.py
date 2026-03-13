@@ -199,7 +199,45 @@ class XYZReader:
             coords.append([x, y, z])
 
         atoms = Atoms(symbols=elements, positions=np.array(coords, dtype=np.float64))
-        
+
+        # Parse extXYZ comment line for Lattice and PBC info
+        # The comment line was at index (natoms_line_idx + 1); we need to re-find it.
+        # Re-scan: after the natoms line, the very next non-empty line is the comment.
+        comment_line = None
+        _scan = 0
+        while _scan < len(lines) and not lines[_scan].strip():
+            _scan += 1
+        # skip natoms line
+        if _scan < len(lines):
+            try:
+                int(lines[_scan].strip())
+                _scan += 1
+            except ValueError:
+                pass
+        # comment line
+        if _scan < len(lines):
+            comment_line = lines[_scan]
+
+        if comment_line:
+            # Try to parse Lattice="a b c d e f g h i"
+            lattice_match = re.search(r'[Ll]attice\s*=\s*"([^"]+)"', comment_line)
+            pbc_match = re.search(r'[Pp][Bb][Cc]\s*=\s*"([^"]+)"', comment_line)
+            if lattice_match:
+                try:
+                    vals = [float(v) for v in lattice_match.group(1).split()]
+                    if len(vals) == 9:
+                        cell = np.array(vals).reshape(3, 3)
+                        atoms.set_cell(cell)
+                        if pbc_match:
+                            pbc_str = pbc_match.group(1).upper().split()
+                            pbc = [s in ('T', 'TRUE', '1') for s in pbc_str]
+                            if len(pbc) == 3:
+                                atoms.set_pbc(pbc)
+                        else:
+                            atoms.set_pbc(True)
+                except (ValueError, IndexError):
+                    pass
+
         # Store charge and multiplicity in atoms.info for UMA
         if charge is not None:
             atoms.info['charge'] = charge
@@ -207,5 +245,5 @@ class XYZReader:
             atoms.info['mult'] = mult
         if mult is not None:
             atoms.info['spin'] = (mult -1)/2
-        
+
         return atoms

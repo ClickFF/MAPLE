@@ -17,11 +17,14 @@ from ase import Atoms
 from ...jobABC import JobABC
 from maple.function.timer import timer
 
-from ..integrator.velocity_verlet import VelocityVerlet
 from ..utils import (
     calculate_temperature,
     calculate_kinetic_energy,
-    initialize_velocities
+    initialize_velocities,
+    HA_PER_ANG_TO_AU,
+    BOHR_TO_ANGSTROM,
+    FS_TO_AU,
+    AMU_TO_AU,
 )
 from ..logger import MDLogger
 
@@ -67,7 +70,6 @@ class NVE(JobABC):
         self.params = self._init_params(NVEParams, paras, ("md", "MD", "nve", "NVE"))
 
         # Initialize components
-        self.integrator = VelocityVerlet(atoms, self.params.timestep)
         self.logger = MDLogger(
             output_path=output,
             log_every=self.params.log_every,
@@ -124,7 +126,7 @@ class NVE(JobABC):
         Initialize velocities from Maxwell-Boltzmann distribution.
 
         Returns:
-            velocities: Velocity array (Å/fs)
+            velocities: Velocity array in atomic units (Bohr/a.u. time)
         """
         self.log_info([
             f"\nInitializing velocities at {self.params.temperature:.2f} K...\n"
@@ -151,13 +153,20 @@ class NVE(JobABC):
 
     def _run_simulation(self, velocities: np.ndarray) -> np.ndarray:
         """
-        Run NVE simulation.
+        Run NVE simulation using Velocity Verlet with force caching.
 
-        Args:
-            velocities: Initial velocities (Å/fs)
+        Each step calls get_forces() only once: the forces computed at the end
+        of step n are reused as the first half-step forces of step n+1.
 
-        Returns:
-            Final velocities (Å/fs)
+        Parameters
+        ----------
+        velocities : np.ndarray
+            Initial velocities in atomic units (Bohr/a.u. time)
+
+        Returns
+        -------
+        np.ndarray
+            Final velocities in atomic units (Bohr/a.u. time)
         """
         # Start logging
         self.logger.start_simulation(
@@ -170,20 +179,35 @@ class NVE(JobABC):
 
         self.logger.log_main(["\nStarting NVE simulation...\n\n"])
 
-        # Current velocities
+        dt = self.params.timestep * FS_TO_AU
+        masses = (self.atoms.get_masses() * AMU_TO_AU)[:, np.newaxis]
         v = velocities.copy()
 
-        # Main MD loop
+        # Cache forces at t=0; reused as first B-step forces each cycle.
+        forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU  # Ha/Å → a.u.
+
+        # Main MD loop (Velocity Verlet with force caching)
         for step in range(1, self.params.steps + 1):
-            # Integrate one step
-            v = self.integrator.step(v)
+            # B: half-step velocity (uses cached forces from end of previous step)
+            v += 0.5 * forces / masses * dt
+
+            # A: full-step position
+            self.atoms.set_positions(
+                self.atoms.get_positions() + v * dt * BOHR_TO_ANGSTROM
+            )
+            if any(self.atoms.pbc):
+                self.atoms.wrap()
+
+            # B: half-step velocity with new forces; cache for next step
+            forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU
+            v += 0.5 * forces / masses * dt
 
             # Calculate thermodynamic quantities
             current_time = step * self.params.timestep
             temperature = calculate_temperature(self.atoms, v)
             kinetic_energy = calculate_kinetic_energy(self.atoms, v)
-            potential_energy = self.atoms.get_potential_energy()  # eV
-            total_energy = kinetic_energy + potential_energy * self.logger.eV2Hartree
+            potential_energy = self.atoms.get_potential_energy()  # Ha
+            total_energy = kinetic_energy + potential_energy
 
             # Log data
             self.logger.log_step(

@@ -6,16 +6,13 @@ using machine learning potentials.
 
 Supported ensembles:
     - NVE (microcanonical)
-    - NVT (canonical) - future
-    - NPT (isothermal-isobaric) - future
+    - NVT (canonical) with Langevin or V-rescale thermostat
+    - NPT (isothermal-isobaric) with Berendsen or C-rescale barostat
 
 Main components:
     - Integrators: Velocity Verlet (symplectic)
-    - Thermostats: Langevin, Berendsen - future
-    - Barostats: Berendsen, Parrinello-Rahman - future
-
-Author: Claude
-Date: 2026-01-30
+    - Thermostats: Langevin (BAOAB), V-rescale (Bussi 2007)
+    - Barostats: Berendsen, C-rescale (Bernetti & Bussi 2020)
 """
 
 __version__ = '0.1.0'

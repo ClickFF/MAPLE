@@ -30,6 +30,29 @@ AU_TO_FS = 1.0 / FS_TO_AU
 BOHR_TO_ANGSTROM = 0.529177249
 ANGSTROM_TO_BOHR = 1.0 / BOHR_TO_ANGSTROM
 
+# Force conversions
+# MAPLE calculators (AIMNet2, MACE, UMA) return forces in Ha/Å.
+# The MD integrator needs Ha/Bohr (atomic units).
+# Ha/Å → Ha/Bohr: multiply by Å/Bohr = ANGSTROM_TO_BOHR ≈ 1.8897
+HA_PER_ANG_TO_AU = ANGSTROM_TO_BOHR  # Ha/Å → Ha/Bohr
+
+# Legacy alias kept for backward compatibility (was used when forces were assumed eV/Å)
+EV_PER_ANG_TO_AU = 1.0 / (27.211386245988 * BOHR_TO_ANGSTROM)  # ≈ 0.019447
+
+# Pressure unit conversions
+# Derivation: 1 eV = 1.6021766208e-19 J, 1 Å³ = 1e-30 m³ → 1 eV/Å³ = 1.6021766208e11 Pa = 1.6021766208e6 bar
+EV_PER_ANG3_TO_BAR = 1.6021766208e-19 / 1e-30 * 1e-5   # eV/Å³ → bar
+BAR_TO_EV_PER_ANG3 = 1.0 / EV_PER_ANG3_TO_BAR          # bar → eV/Å³
+
+# Kinetic energy conversion for pressure calculation
+# 1 amu·Å²/fs² = 1.66054e-27 kg × 1e-20 m² / 1e-30 s² = 1.66054e-17 J
+# → 1.66054e-17 / 1.60218e-19 eV ≈ 103.6427 eV
+AMU_ANG2_PER_FS2_TO_EV = 1.03642695e+2
+
+# Default isothermal compressibility (liquid water at 300 K, 1 bar)
+# Reference: CRC Handbook of Chemistry and Physics
+DEFAULT_COMPRESSIBILITY = 4.5e-5   # 1/bar
+
 
 # ========== Core MD Calculations ==========
 
@@ -40,7 +63,8 @@ def calculate_temperature(atoms: Atoms, velocities: np.ndarray) -> float:
     Uses the equipartition theorem:
         T = 2 * KE / (N_dof * k_B)
 
-    where N_dof = 3N - 3 (removing center of mass translation)
+    where N_dof = 3N - 3 for isolated molecules (removing COM translation),
+          or 3N for periodic systems (no overall translation constraint)
 
     Parameters
     ----------
@@ -59,7 +83,12 @@ def calculate_temperature(atoms: Atoms, velocities: np.ndarray) -> float:
     kinetic = 0.5 * np.sum(masses[:, np.newaxis] * velocities**2)
 
     n_atoms = len(atoms)
-    n_dof = 3 * n_atoms - 3  # Remove center of mass translational DOF
+    # Periodic systems have no overall translation; isolated molecules lose 3 COM DOF.
+    # Allen & Tildesley, Computer Simulation of Liquids, 2nd ed., §3.3
+    if any(atoms.pbc):
+        n_dof = 3 * n_atoms
+    else:
+        n_dof = 3 * n_atoms - 3
 
     if n_dof <= 0:
         return 0.0
@@ -311,30 +340,36 @@ def calculate_angular_momentum(
     origin: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
-    Calculate total angular momentum.
+    Calculate total angular momentum in atomic units.
 
     L = sum_i (r_i - origin) × (m_i * v_i)
+
+    All quantities are converted to atomic units before computation:
+    positions Å → Bohr, masses amu → a.u., velocities already in a.u.
 
     Parameters
     ----------
     atoms : ase.Atoms
         Atomic system
     velocities : np.ndarray
-        Atomic velocities
+        Atomic velocities in atomic units (Bohr/a.u. time)
     origin : np.ndarray, optional
-        Reference point (default: center of mass)
+        Reference point in Å (default: center of mass).
+        Converted to Bohr internally.
 
     Returns
     -------
     np.ndarray
-        Angular momentum vector (3,)
+        Angular momentum vector in atomic units (3,)
     """
     masses = atoms.get_masses() * AMU_TO_AU
-    positions = atoms.get_positions()
+    positions = atoms.get_positions() * ANGSTROM_TO_BOHR  # Å → Bohr
 
     if origin is None:
-        # Use center of mass
+        # Center of mass in Bohr
         origin = np.sum(masses[:, np.newaxis] * positions, axis=0) / np.sum(masses)
+    else:
+        origin = np.asarray(origin) * ANGSTROM_TO_BOHR
 
     angular_momentum = np.zeros(3)
     for mass, pos, vel in zip(masses, positions, velocities):

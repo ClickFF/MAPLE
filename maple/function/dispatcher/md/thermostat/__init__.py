@@ -1,15 +1,12 @@
 """
 Thermostat implementations for NVT simulations.
 
-Provides various temperature control methods:
-    - Langevin: Stochastic dynamics with friction (future)
-    - Berendsen: Velocity scaling (future)
-    - Nosé-Hoover: Deterministic extended system (future)
-    - Andersen: Stochastic velocity reassignment (future)
+Provides temperature control methods:
+    - Langevin: Stochastic BAOAB integrator — correct NVT, strong coupling
+    - V-rescale: Stochastic velocity rescaling (Bussi 2007) — correct NVT, weaker perturbation
 """
 
-# Will be populated as thermostats are implemented
-# from .langevin import LangevinThermostat
-# from .berendsen import BerendsenThermostat
+from .langevin import LangevinThermostat
+from .vrescale import VRescaleThermostat
 
-__all__ = []
+__all__ = ['LangevinThermostat', 'VRescaleThermostat']

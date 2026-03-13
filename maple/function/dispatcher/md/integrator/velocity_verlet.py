@@ -18,10 +18,9 @@ Advantages:
 
 import numpy as np
 from ase import Atoms
-from typing import Tuple
 
 # Import unit conversions from utils
-from ..utils import FS_TO_AU, AMU_TO_AU
+from ..utils import FS_TO_AU, AMU_TO_AU, HA_PER_ANG_TO_AU, BOHR_TO_ANGSTROM
 
 
 class VelocityVerlet:
@@ -80,16 +79,20 @@ class VelocityVerlet:
         masses = self.masses[:, np.newaxis]  # Shape: (N_atoms, 1)
 
         # Step 1: Half-step velocity update
-        forces = self.atoms.get_forces()  # ← Calculator call (expensive!)
+        forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU  # Ha/Å → Ha/Bohr (a.u.)
         velocities += 0.5 * forces / masses * dt
 
         # Step 2: Full-step position update
-        positions = self.atoms.get_positions()
-        positions += velocities * dt
+        # v is in a.u. (Bohr/a.u.time), dt in a.u. → displacement in Bohr
+        # ASE set_positions expects Å → convert
+        positions = self.atoms.get_positions()                   # Å
+        positions += velocities * dt * BOHR_TO_ANGSTROM          # Å
         self.atoms.set_positions(positions)
+        if any(self.atoms.pbc):
+            self.atoms.wrap()
 
         # Step 3: Recalculate forces at new positions
-        forces = self.atoms.get_forces()  # ← Calculator call again
+        forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU  # Ha/Å → Ha/Bohr (a.u.)
 
         # Step 4: Final half-step velocity update
         velocities += 0.5 * forces / masses * dt
@@ -115,7 +118,7 @@ class VelocityVerlet:
         dt = self.timestep
         masses = self.masses[:, np.newaxis]
 
-        forces = self.atoms.get_forces()
+        forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU  # Ha/Å → Ha/Bohr (a.u.)
         velocities += 0.5 * forces / masses * dt
 
         return velocities
@@ -133,9 +136,11 @@ class VelocityVerlet:
         """
         dt = self.timestep
 
-        positions = self.atoms.get_positions()
-        positions += velocities * dt
+        positions = self.atoms.get_positions()                   # Å
+        positions += velocities * dt * BOHR_TO_ANGSTROM          # Å
         self.atoms.set_positions(positions)
+        if any(self.atoms.pbc):
+            self.atoms.wrap()
 
     def complete_step_v(self, velocities: np.ndarray) -> np.ndarray:
         """
@@ -156,20 +161,18 @@ class VelocityVerlet:
         dt = self.timestep
         masses = self.masses[:, np.newaxis]
 
-        forces = self.atoms.get_forces()
+        forces = self.atoms.get_forces() * HA_PER_ANG_TO_AU  # Ha/Å → Ha/Bohr (a.u.)
         velocities += 0.5 * forces / masses * dt
 
         return velocities
 
-    def split_step(self, velocities: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def split_step(self, velocities: np.ndarray) -> np.ndarray:
         """
-        Perform split integration for thermostat insertion.
+        Perform B-A half-steps for thermostat insertion.
 
-        This allows thermostats to be applied between the two velocity half-steps:
-            v(t+dt/2) = v(t) + F(t)/m * dt/2
-            r(t+dt) = r(t) + v(t+dt/2) * dt
-            # ← Apply thermostat here
-            v(t+dt) = v(t+dt/2) + F(t+dt)/m * dt/2
+        Applies the first half-step velocity update and the full-step position
+        update. The caller applies the thermostat (O-step) before calling
+        complete_step_v() for the second B half-step.
 
         Parameters
         ----------
@@ -178,139 +181,9 @@ class VelocityVerlet:
 
         Returns
         -------
-        velocities_half : np.ndarray
-            Half-step velocities (before thermostat)
-        positions_new : np.ndarray
-            Updated positions
+        np.ndarray
+            Half-step velocities (after first B, before O-step)
         """
-        # First half-step
         velocities_half = self.half_step_v(velocities)
-
-        # Position update
         self.full_step_r(velocities_half)
-
-        positions_new = self.atoms.get_positions()
-
-        return velocities_half, positions_new
-
-    def get_current_forces(self) -> np.ndarray:
-        """
-        Get forces at current positions.
-
-        Returns
-        -------
-        np.ndarray
-            Forces in eV/Å (ASE units)
-        """
-        return self.atoms.get_forces()
-
-    def get_potential_energy(self) -> float:
-        """
-        Get potential energy at current positions.
-
-        Returns
-        -------
-        float
-            Potential energy (uses calculator's units, typically eV)
-        """
-        return self.atoms.get_potential_energy(force_consistent=True)
-
-
-class IntegratorBase:
-    """
-    Base class for MD integrators (future extension).
-
-    This provides a common interface for different integration schemes:
-    - Velocity Verlet
-    - Leapfrog
-    - Verlet (original)
-    - Higher-order integrators
-    """
-
-    def __init__(self, atoms: Atoms, timestep: float):
-        """
-        Initialize base integrator.
-
-        Parameters
-        ----------
-        atoms : ase.Atoms
-            Molecular system
-        timestep : float
-            Time step in femtoseconds
-        """
-        self.atoms = atoms
-        self.timestep_fs = timestep
-        self.timestep = timestep * FS_TO_AU
-        self.masses = atoms.get_masses() * AMU_TO_AU
-
-    def step(self, velocities: np.ndarray) -> np.ndarray:
-        """
-        Perform one integration step.
-
-        Must be implemented by subclasses.
-
-        Parameters
-        ----------
-        velocities : np.ndarray
-            Current velocities
-
-        Returns
-        -------
-        np.ndarray
-            Updated velocities
-        """
-        raise NotImplementedError("Subclasses must implement step()")
-
-
-# Convenience function for standalone usage
-def integrate_nve(
-    atoms: Atoms,
-    velocities: np.ndarray,
-    timestep: float,
-    n_steps: int
-) -> Tuple[list, list, list]:
-    """
-    Simple standalone NVE integration for testing.
-
-    Parameters
-    ----------
-    atoms : ase.Atoms
-        Molecular system with calculator
-    velocities : np.ndarray
-        Initial velocities in atomic units
-    timestep : float
-        Time step in femtoseconds
-    n_steps : int
-        Number of integration steps
-
-    Returns
-    -------
-    trajectory : list of ase.Atoms
-        Atomic configurations at each step
-    energies : list of float
-        Total energies at each step
-    velocities_traj : list of np.ndarray
-        Velocities at each step
-    """
-    integrator = VelocityVerlet(atoms, timestep)
-
-    trajectory = []
-    energies = []
-    velocities_traj = []
-
-    for step in range(n_steps):
-        # Integrate
-        velocities = integrator.step(velocities)
-
-        # Record
-        trajectory.append(atoms.copy())
-
-        potential = integrator.get_potential_energy()
-        from ..utils import calculate_kinetic_energy
-        kinetic = calculate_kinetic_energy(atoms, velocities)
-        total = kinetic + potential
-
-        energies.append(total)
-        velocities_traj.append(velocities.copy())
-
-    return trajectory, energies, velocities_traj
+        return velocities_half

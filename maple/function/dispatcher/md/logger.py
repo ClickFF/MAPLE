@@ -65,19 +65,24 @@ class MDLogger:
         self.energies = []
         self.temperatures = []
         self.times = []
+        self.pressures = []   # NPT only
 
     def start_simulation(self, ensemble: str, timestep: float, n_steps: int,
-                        temperature: float, atoms: Atoms):
+                        temperature: float, atoms: Atoms,
+                        pressure: float = None):
         """
         Initialize output files and write headers.
 
         Args:
-            ensemble: Ensemble type (nve, nvt)
+            ensemble: Ensemble type (nve, nvt, npt)
             timestep: Timestep in fs
             n_steps: Total number of steps
             temperature: Target temperature in K
             atoms: ASE Atoms object
+            pressure: Target pressure in bar (NPT only)
         """
+        self._ensemble = ensemble.lower()
+
         # Open files
         self.thermo_file = open(self.thermo_path, 'w')
         self.traj_file = open(self.traj_path, 'w')
@@ -93,8 +98,10 @@ class MDLogger:
             f"Simulation time: {n_steps * timestep:.2f} fs\n",
         ])
 
-        if ensemble.lower() == 'nvt':
+        if self._ensemble in ('nvt', 'npt'):
             self.log_main([f"Target temp:     {temperature:.2f} K\n"])
+        if self._ensemble == 'npt' and pressure is not None:
+            self.log_main([f"Target pressure: {pressure:.2f} bar\n"])
 
         self.log_main([
             f"\nSystem:\n",
@@ -108,13 +115,23 @@ class MDLogger:
         # Write thermodynamics header
         self.thermo_file.write(f"# MD Simulation - {ensemble.upper()} Ensemble\n")
         self.thermo_file.write(f"# Timestep: {timestep} fs\n")
-        self.thermo_file.write(f"# {'Step':>8} {'Time(fs)':>12} {'Temp(K)':>12} "
-                              f"{'KE(Ha)':>15} {'PE(Ha)':>15} {'TE(Ha)':>15}\n")
+        if self._ensemble == 'npt':
+            self.thermo_file.write(
+                f"# {'Step':>8} {'Time(fs)':>12} {'Temp(K)':>12} "
+                f"{'KE(Ha)':>15} {'PE(Ha)':>15} {'TE(Ha)':>15} "
+                f"{'Press(bar)':>12} {'Vol(A^3)':>12}\n"
+            )
+        else:
+            self.thermo_file.write(
+                f"# {'Step':>8} {'Time(fs)':>12} {'Temp(K)':>12} "
+                f"{'KE(Ha)':>15} {'PE(Ha)':>15} {'TE(Ha)':>15}\n"
+            )
         self.thermo_file.flush()
 
     def log_step(self, step: int, time: float, temperature: float,
                  kinetic_energy: float, potential_energy: float,
-                 total_energy: float, atoms: Atoms, velocities: np.ndarray):
+                 total_energy: float, atoms: Atoms, velocities: np.ndarray,
+                 pressure: float = None, volume: float = None):
         """
         Log data for current step.
 
@@ -126,10 +143,12 @@ class MDLogger:
             potential_energy: Potential energy (Hartree)
             total_energy: Total energy (Hartree)
             atoms: Current ASE Atoms object
-            velocities: Current velocities (Å/fs)
+            velocities: Current velocities (atomic units: Bohr/a.u. time)
+            pressure: Instantaneous pressure in bar (NPT only)
+            volume: Cell volume in Å³ (NPT only)
         """
-        # Convert PE from eV to Hartree
-        potential_energy_hartree = potential_energy * self.eV2Hartree
+        # PE and KE are both passed in Hartree (UMACalculator already converts)
+        potential_energy_hartree = potential_energy
         kinetic_energy_hartree = kinetic_energy
         total_energy_hartree = kinetic_energy_hartree + potential_energy_hartree
 
@@ -137,23 +156,41 @@ class MDLogger:
         self.energies.append(total_energy_hartree)
         self.temperatures.append(temperature)
         self.times.append(time)
+        if pressure is not None:
+            self.pressures.append(pressure)
 
         # Write thermodynamic data every step
-        self.thermo_file.write(
-            f"{step:>10} {time:>12.3f} {temperature:>12.2f} "
-            f"{kinetic_energy_hartree:>15.8f} {potential_energy_hartree:>15.8f} "
-            f"{total_energy_hartree:>15.8f}\n"
-        )
+        if self._ensemble == 'npt' and pressure is not None and volume is not None:
+            self.thermo_file.write(
+                f"{step:>10} {time:>12.3f} {temperature:>12.2f} "
+                f"{kinetic_energy_hartree:>15.8f} {potential_energy_hartree:>15.8f} "
+                f"{total_energy_hartree:>15.8f} {pressure:>12.3f} {volume:>12.4f}\n"
+            )
+        else:
+            self.thermo_file.write(
+                f"{step:>10} {time:>12.3f} {temperature:>12.2f} "
+                f"{kinetic_energy_hartree:>15.8f} {potential_energy_hartree:>15.8f} "
+                f"{total_energy_hartree:>15.8f}\n"
+            )
         self.thermo_file.flush()
 
         # Write to main output at log_every frequency
         if step % self.log_every == 0:
-            self.log_main([
-                f"Step {step:6d} | "
-                f"Time: {time:8.2f} fs | "
-                f"T: {temperature:7.2f} K | "
-                f"E: {total_energy_hartree:12.6f} Ha\n"
-            ])
+            if self._ensemble == 'npt' and pressure is not None:
+                self.log_main([
+                    f"Step {step:6d} | "
+                    f"Time: {time:8.2f} fs | "
+                    f"T: {temperature:7.2f} K | "
+                    f"E: {total_energy_hartree:12.6f} Ha | "
+                    f"P: {pressure:9.2f} bar\n"
+                ])
+            else:
+                self.log_main([
+                    f"Step {step:6d} | "
+                    f"Time: {time:8.2f} fs | "
+                    f"T: {temperature:7.2f} K | "
+                    f"E: {total_energy_hartree:12.6f} Ha\n"
+                ])
 
         # Write trajectory at traj_every frequency
         if step % self.traj_every == 0:
@@ -181,8 +218,7 @@ class MDLogger:
         temp_mean = np.mean(temperatures)
         temp_std = np.std(temperatures)
 
-        # Write to main output
-        self.log_main([
+        summary_lines = [
             "\n" + "="*80 + "\n",
             f"{'MD SIMULATION COMPLETED':^80}\n",
             "="*80 + "\n",
@@ -194,12 +230,10 @@ class MDLogger:
             f"\nTemperature Statistics:\n",
             f"  Mean temperature:      {temp_mean:15.2f} K\n",
             f"  Std deviation:         {temp_std:15.2f} K\n",
-            f"\nOutput Files:\n",
-            f"  Thermodynamics:        {self.thermo_path.name}\n",
-            f"  Trajectory:            {self.traj_path.name}\n",
-            f"  Summary:               {self.summary_path.name}\n",
-            "="*80 + "\n",
-        ])
+        ]
+
+        # Write to main output
+        self.log_main(summary_lines)
 
         # Write summary file
         with open(self.summary_path, 'w') as f:
@@ -215,6 +249,27 @@ class MDLogger:
             f.write(f"Temperature Statistics:\n")
             f.write(f"  Mean temperature:      {temp_mean:.2f} K\n")
             f.write(f"  Std deviation:         {temp_std:.2f} K\n")
+
+            if self.pressures:
+                pressures = np.array(self.pressures)
+                p_mean = np.mean(pressures)
+                p_std = np.std(pressures)
+                self.log_main([
+                    f"\nPressure Statistics:\n",
+                    f"  Mean pressure:         {p_mean:15.3f} bar\n",
+                    f"  Std deviation:         {p_std:15.3f} bar\n",
+                ])
+                f.write(f"\nPressure Statistics:\n")
+                f.write(f"  Mean pressure:         {p_mean:.3f} bar\n")
+                f.write(f"  Std deviation:         {p_std:.3f} bar\n")
+
+        self.log_main([
+            f"\nOutput Files:\n",
+            f"  Thermodynamics:        {self.thermo_path.name}\n",
+            f"  Trajectory:            {self.traj_path.name}\n",
+            f"  Summary:               {self.summary_path.name}\n",
+            "="*80 + "\n",
+        ])
 
         # Close files
         if self.thermo_file:

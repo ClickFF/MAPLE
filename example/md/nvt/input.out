@@ -1,0 +1,170 @@
+
+**********************************************************************
+*                                                                    *
+*                        M   A   P   L   E                           *
+*                                                                    *
+*      MAchine-learning Potential for Landscape Exploration          *
+*                                                                    *
+*                                                                    *
+*      © 2025 University of Pittsburgh. All rights reserved.         *
+*      Licensed under CC BY 4.0 for academic use.                    *
+*                                                                    *
+*      Principal Developer:  Xujian Wang                             *
+*                                                                    *
+**********************************************************************
+
+
+Parsing # commands...
+Global parameter: model = uma
+Task set to 'md'
+Global parameter: device = gpu0
+Parsed configuration:
+----------------------------------------
+Task: md
+model          : uma
+ensemble       : nvt
+timestep       : 0.5
+steps          : 1000
+temperature    : 300
+traj_every     : 10
+log_every      : 100
+init_velocities: True
+remove_com     : True
+random_seed    : None
+thermostat     : langevin
+friction       : 0.01
+tau_t          : 200.0
+barostat       : c-rescale
+pressure       : 1.0
+tau_p          : 2000.0
+compressibility: 4.5e-05
+device         : gpu0
+
+                             Coordinates                              
+**********************************************************************
+
+Group 1 (inline)
+Charge: 3, Multiplicity: 1
+--------------------
+1    Al            -1.800310             1.736750            -0.027990
+2    O             -0.362960             1.253300            -1.125180
+3    H             -0.095160             2.042980            -1.661070
+4    O             -2.073780             3.255580            -1.086030
+5    H             -1.869420             4.069500            -0.559360
+6    O             -2.943530             0.788190            -1.177120
+7    H             -2.483690            -0.036670            -1.477880
+8    O             -1.543590             0.205300             1.033390
+9    H             -0.586200            -0.047900             1.051350
+10   O             -3.221360             2.213610             1.096690
+11   H             -3.736480             2.981240             0.744680
+12   O             -0.667210             2.708480             1.095210
+13   H             -0.138470             2.097490             1.664460
+14   H             -3.035290             3.329890            -1.309210
+15   H             -3.870960             1.473820             1.183170
+16   H             -3.755840             0.470160            -0.714570
+17   H             -1.996390            -0.578430             0.638260
+18   H              0.431440             1.069330            -0.564130
+19   H              0.006380             3.173800             0.535710
+20   N              2.777230             2.497330            -0.960690
+21   H              3.821300             2.479900            -0.937260
+22   H              2.441840             2.871990            -0.045300
+23   H              2.441570             1.512060            -1.046560
+
+*** WARNING: 'tau_t' parameter was specified but thermostat is 'langevin'.
+    The tau_t parameter is only used by the V-rescale thermostat.
+
+
+================================================================================
+                               NVT MD PARAMETERS                                
+================================================================================
+Ensemble:           NVT (canonical)
+Thermostat:         langevin
+Timestep:           0.500 fs
+Total steps:        1000
+Temperature:        300.00 K
+Friction (γ):       0.0100 1/fs
+
+Output frequencies:
+  Log every:        100 steps
+  Traj every:       10 steps
+
+Velocity init:      True
+Remove COM motion:  True
+================================================================================
+
+Initializing velocities at 300.00 K...
+Initial temperature: 278.93 K
+
+================================================================================
+                                 MD SIMULATION                                  
+================================================================================
+Ensemble:        NVT
+Timestep:        0.500 fs
+Total steps:     1000
+Simulation time: 500.00 fs
+Target temp:     300.00 K
+
+System:
+  Atoms:         23
+  Formula:       H15AlNO6
+  Charge:        3
+  Multiplicity:  1
+
+================================================================================
+
+Starting NVT simulation (langevin)...
+
+Step    100 | Time:    50.00 fs | T:  249.84 K | E:  -756.660322 Ha
+Step    200 | Time:   100.00 fs | T:  290.87 K | E:  -756.672648 Ha
+Step    300 | Time:   150.00 fs | T:  351.32 K | E:  -756.676468 Ha
+Step    400 | Time:   200.00 fs | T:  398.55 K | E:  -756.675298 Ha
+Step    500 | Time:   250.00 fs | T:  313.32 K | E:  -756.689043 Ha
+Step    600 | Time:   300.00 fs | T:  231.39 K | E:  -756.698844 Ha
+Step    700 | Time:   350.00 fs | T:  361.89 K | E:  -756.688014 Ha
+Step    800 | Time:   400.00 fs | T:  288.29 K | E:  -756.696421 Ha
+Step    900 | Time:   450.00 fs | T:  470.37 K | E:  -756.679389 Ha
+Step   1000 | Time:   500.00 fs | T:  397.55 K | E:  -756.690497 Ha
+
+================================================================================
+                            MD SIMULATION COMPLETED                             
+================================================================================
+
+Energy Statistics:
+  Mean total energy:       -756.67972371 Hartree
+  Std deviation:              0.02348950 Hartree
+  Energy drift:              -0.14872075 Hartree
+  Relative drift:            0.019654 %
+
+Temperature Statistics:
+  Mean temperature:               316.66 K
+  Std deviation:                   54.65 K
+
+Output Files:
+  Thermodynamics:        input_md_thermo.dat
+  Trajectory:            input_md_traj.xyz
+  Summary:               input_md_summary.txt
+================================================================================
+
+NVT simulation completed successfully.
+
+
+
+Program started: 2026-03-13 21:28:56
+
+======================================================================
+                      TIMING SUMMARY
+======================================================================
+Input Reading.......................................   0.061 s  (   0.1 %)
+  Settings Parsing....................................   0.060 s  (  98.3 %)
+  Coordinate Section Parsing..........................   0.000 s  (   0.6 %)
+  Post-Processing Expansion...........................   0.000 s  (   0.0 %)
+MLP Initialization..................................   4.472 s  (   5.0 %)
+Job Dispatching.....................................  85.746 s  (  95.0 %)
+  MD Simulation (NVT).................................  85.743 s  ( 100.0 %)
+======================================================================
+Total wall time: 90.279 s
+Total CPU time: 96.542 s
+======================================================================
+
+Program ended: 2026-03-13 21:30:26
+TOTAL RUN TIME: 0 days 0 hours 1 minutes 30 seconds 279 msec

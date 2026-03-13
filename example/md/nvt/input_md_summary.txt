@@ -1,0 +1,15 @@
+MD Simulation Summary
+============================================================
+
+Total steps:             1000
+Total time:              500.00 fs
+
+Energy Statistics:
+  Mean total energy:     -756.67972371 Ha
+  Std deviation:         0.02348950 Ha
+  Energy drift:          -0.14872075 Ha
+  Relative drift:        0.019654 %
+
+Temperature Statistics:
+  Mean temperature:      316.66 K
+  Std deviation:         54.65 K

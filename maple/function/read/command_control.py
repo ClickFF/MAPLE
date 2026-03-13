@@ -16,7 +16,7 @@ class CommandControl:
         "egret", "aimnet2", "uma", "maceomol", "aimnet2nse"
     }
 
-    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc"}
+    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc", "md"}
 
     # Defaults assigned only when task is selected
     DEFAULTS = {
@@ -36,6 +36,26 @@ class CommandControl:
             "treat_imag_as_real": False,
             "device": "cpu",
         },
+        "md": {
+            "ensemble":        "nve",
+            "timestep":        0.5,
+            "steps":           1000,
+            "temperature":     300.0,
+            "traj_every":      10,
+            "log_every":       100,
+            "init_velocities": True,
+            "remove_com":      True,
+            "random_seed":     None,
+            # Thermostat selection (NVT / NPT)
+            "thermostat":      "v-rescale",   # 'langevin' | 'v-rescale'
+            "friction":        0.001,          # 1/fs (Langevin only)
+            "tau_t":           200.0,          # fs  (V-rescale only)
+            # Barostat selection (NPT only)
+            "barostat":        "c-rescale",   # 'berendsen' | 'c-rescale'
+            "pressure":        1.0,            # bar
+            "tau_p":           2000.0,         # fs
+            "compressibility": 4.5e-5,         # 1/bar
+        },
         "solv": {"solvent": "water", "explicit": None},
     }
 
@@ -46,6 +66,7 @@ class CommandControl:
         "freq": {"mw", "nonmw", "both"},
         "sp":   set(),
         "irc":  {"gs", "hpc", "eulerpc", "lqa"},
+        "md":   {"nve", "nvt", "npt"},
     }
 
     def __init__(self, params: Dict[str, Any], task: str, output_path: Optional[str] = None):
@@ -179,6 +200,13 @@ class CommandControl:
             if allowed and params["method"] not in allowed:
                 cls._log_error(output_path, f"Method '{params['method']}' not implemented for task '{task}'.")
                 raise ValueError(f"Method '{params['method']}' not implemented for task '{task}'.")
+
+        # check md ensemble compatibility
+        if task == "md" and "ensemble" in params:
+            allowed = cls.IMPLEMENTATION_MAP.get("md", set())
+            if params["ensemble"] not in allowed:
+                cls._log_error(output_path, f"MD ensemble '{params['ensemble']}' not supported.")
+                raise ValueError(f"MD ensemble '{params['ensemble']}' not supported. Choose from: {allowed}")
 
     @staticmethod
     def _log_info(output_path: Optional[str], lines: List[str]) -> None:
