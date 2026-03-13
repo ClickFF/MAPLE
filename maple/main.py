@@ -1,7 +1,12 @@
 import sys
 import os
 import argparse
-from maple.function.engine import engine
+
+try:
+    from importlib.metadata import version as _pkg_version
+    _VERSION = _pkg_version('maple')
+except Exception:
+    _VERSION = '0.1.0'
 
 
 def main():
@@ -19,8 +24,9 @@ Examples:
     
     parser.add_argument('input_file', nargs='?', help='Input file path')
     parser.add_argument('output_file', nargs='?', help='Output file path (optional, auto-generated if not provided)')
-    parser.add_argument('--test', type=int, choices=range(1, 9), 
+    parser.add_argument('--test', type=int, choices=range(1, 9),
                         help='Run test case (1-8): 1=LBFGS, 2=NEB, 3=String, 4=Dimer, 5=RFO, 6=IRC, 7=Freq, 8=Scan')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {_VERSION}')
     
     args = parser.parse_args()
     
@@ -67,6 +73,7 @@ Examples:
     
     # Run MAPLE engine
     try:
+        from maple.function.engine import engine
         eng = engine()
         eng(input_file, output_file)
         print(f"\nCalculation completed successfully!")
