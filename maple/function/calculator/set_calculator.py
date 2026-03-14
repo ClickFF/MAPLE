@@ -35,6 +35,7 @@ MODEL_NAME_TO_FILE = {
     'maceoff23m': 'maceoff23m.pt',
     'maceomol': 'maceomol.pt',
     'egret': 'egret1s.pt',
+    'uma': 'uma-s-1p1.pt',
 }
 
 HF_REPO_ID = "Wayne7815/MAPLE_model"
@@ -135,7 +136,8 @@ class SetClaculator():
                 calculator = AIMNet2Calculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
             elif self.model in ['uma']:
                 from .uma._uma_calculator import UMACalculator
-                calculator = UMACalculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)
+                uma_model_path = self._download_model('uma')
+                calculator = UMACalculator(model_path=uma_model_path, device=self.device, implicit=self.implicit, solvent=self.solvent)
             elif self.model in ['maceomol']:
                 from .mace._mace_general_calculator import MACEModelCalculator
                 calculator = MACEModelCalculator(model=self.model, device=self.device, implicit = self.implicit, solvent = self.solvent)

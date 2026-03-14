@@ -1,4 +1,3 @@
-import importlib
 import torch
 import numpy as np
 from typing import Literal
@@ -25,7 +24,7 @@ class UMACalculator(FAIRChemCalculator):
     def __init__(
         self,
         device: torch.device,
-        model: str = "uma",
+        model_path: str | None = None,
         overrides: dict | None = None,
         implicit: Literal["gbsa", "none"] = "gbsa",
         solvent: str = 'none',
@@ -35,24 +34,31 @@ class UMACalculator(FAIRChemCalculator):
 
         Args:
             device (torch.device): Target device ('cuda' or 'cpu').
-            model (str): UMA model name or local checkpoint path.
+            model_path (str | None): Path to a local checkpoint file. If None,
+                falls back to downloading 'uma-s-1p1' via pretrained_mlip.
             overrides (dict, optional): Additional inference configuration overrides.
         """
-        UMA_MODELS_MAP = {"uma": "uma-s-1p1"}
-        model = UMA_MODELS_MAP.get(model)
-
         device = str(device)
         device = "cuda" if device.startswith("cuda") else "cpu"
 
-        if not importlib.util.find_spec("fairchem"):
-            raise ImportError("fairchem-core is not installed. Please install it first.")
+        if model_path is not None:
+            # Load from local checkpoint
+            from fairchem.core.units.mlip_unit import load_predict_unit
+            predictor = load_predict_unit(
+                str(model_path),
+                inference_settings="default",
+                overrides=overrides,
+                device=device,
+            )
+        else:
+            # Fallback: download via fairchem pretrained registry
+            predictor = pretrained_mlip.get_predict_unit(
+                "uma-s-1p1",
+                inference_settings="default",
+                overrides=overrides,
+                device=device,
+            )
 
-        predictor = pretrained_mlip.get_predict_unit(
-            model,
-            inference_settings="default",
-            overrides=overrides,
-            device=device,
-        )
         super().__init__(predict_unit=predictor, task_name="omol")
         self.device = torch.device(device)
         
