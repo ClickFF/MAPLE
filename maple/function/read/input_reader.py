@@ -14,9 +14,10 @@ from .command_control import CommandControl
 from .header.header import print_banner
 
 from maple.function.utility import Molecules
+from maple.function.utility import LogMixin
 from maple.function.timer import timer
 
-class InputReader():
+class InputReader(LogMixin):
     def __init__(self):
         self.input:str = None
         self.output:str = None
@@ -261,27 +262,6 @@ class InputReader():
         
         return expanded
 
-    def log_error(self, error_message: str) -> None:
-        """
-        Logs error messages to the output file.
-
-        Args:
-            error_message: The error message to log.
-        """
-        with open(self.output, 'a') as file:
-            file.write(f"ERROR: {error_message}\n")
-
-    def log_info(self, info_message: list) -> None:
-        """
-        Logs info messages to the output file.
-
-        Args:
-            info_message: The info message to log.
-        """
-        with open(self.output, 'a') as file:
-            for info in info_message:   
-                file.write(f"{info}")
-
     def settings_command(self, settings: list):
         """
         Parse all # commands using CommandControl and store them in self.
@@ -477,10 +457,12 @@ class InputReader():
                 # Create Atoms object
                 atoms = Atoms(symbols=elements, positions=np.array(coords, dtype=np.float64))
 
-                # Store charge and multiplicity (default to neutral singlet if not specified)
-                atoms.info['charge'] = charge if charge is not None else 0
-                atoms.info['mult']   = mult   if mult   is not None else 1
-                atoms.info['spin']   = (atoms.info['mult'] - 1) / 2
+                # Store charge and multiplicity if provided
+                if charge is not None:
+                    atoms.info['charge'] = charge
+                if mult is not None:
+                    atoms.info['mult'] = mult
+                    atoms.info['spin'] = (mult - 1) / 2
 
                 atoms_list.append(atoms)
 
