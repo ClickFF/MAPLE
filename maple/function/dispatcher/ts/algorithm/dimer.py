@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import math
 import torch
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Optional, Callable, List, Tuple
 
 import numpy as np
@@ -81,33 +81,6 @@ def write_all_images_xyz(filename: str, atoms: Atoms, energy: Optional[float] = 
         for s, (x, y, z) in zip(symbols, pos):
             f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
-# --- small helpers to update dataclass from dict (compatible with your NEB) ---
-
-def _lower_keys(d):
-    if not isinstance(d, dict):
-        return {}
-    return { (k.lower() if isinstance(k, str) else k): v for k, v in d.items() }
-
-def _select_subdict(paras: dict, name_aliases: tuple[str, ...]) -> dict:
-    if not isinstance(paras, dict):
-        return {}
-    low = _lower_keys(paras)
-    for alias in name_aliases:
-        key = alias.lower()
-        if key in low and isinstance(low[key], dict):
-            return low[key]
-    return low
-
-def _update_dataclass_from_dict(dc_obj, d: dict):
-    if not isinstance(d, dict):
-        return dc_obj
-    low = _lower_keys(d)
-    fld_names = {f.name.lower(): f.name for f in fields(dc_obj)}
-    for k_low, v in low.items():
-        if k_low in fld_names:
-            setattr(dc_obj, fld_names[k_low], v)
-    return dc_obj
-
 # =============================================================================
 # ------------------------------ Dimer Params ---------------------------------
 # =============================================================================
@@ -119,8 +92,8 @@ class DimerParams:
     delta: float = 0.005                 # Angstrom; used only if not use_hvp
     rot_max_iter: int = 5               # rotation inner iterations per outer step
     rot_alpha: float = 0.5              # rotation step factor on F_rot (unitless); small ~ (0.1~1)
-    rot_fmax_th: float = 1.0e-3         # convergence threshold on max|F_rot| (Eh/Ang)
-    rot_frms_th: float = 5.0e-4         # convergence threshold on RMS(F_rot)
+    rot_f_max_th: float = 1.0e-3        # convergence threshold on max|F_rot| (Eh/Ang)
+    rot_f_rms_th: float = 5.0e-4        # convergence threshold on RMS(F_rot)
 
     # Translation / trust region
     step0: float = 0.2                  # initial step scaling on search direction
@@ -128,8 +101,8 @@ class DimerParams:
     trust_radius: float = 0.15          # same role as max_step; kept both for clarity
 
     # Convergence (translation forces)
-    fmax_th: float = 5.0e-3             # max(|F_trans|) Eh/Ang
-    frms_th: float = 1.0e-3             # RMS(F_trans) Eh/Ang
+    f_max_th: float = 5.0e-3            # max(|F_trans|) Eh/Ang
+    f_rms_th: float = 1.0e-3            # RMS(F_trans) Eh/Ang
     kappa_to_flip: float = 0.0          # if kappa < this value, flip parallel component
 
     # Iterations
@@ -230,7 +203,6 @@ class Dimer(JobABC):
     def __init__(self,
                  output: str,
                  atoms_init: Atoms,
-                 params: Optional[DimerParams] = None,
                  paras: Optional[dict] = None,
                  hvp_fn: Optional[Callable[[Atoms, np.ndarray], np.ndarray]] = None):
         super().__init__(output)
@@ -239,10 +211,8 @@ class Dimer(JobABC):
         if self.atoms.calc is None:
             raise ValueError("atoms_init must have a working calculator set (atoms.calc).")
 
-        self.params = params if params is not None else DimerParams()
-        if isinstance(paras, dict):
-            dimer_dict = _select_subdict(paras, ("dimer", "DIMER"))
-            _update_dataclass_from_dict(self.params, dimer_dict)
+        # Initialize params from paras dict
+        self.params = self._init_params(DimerParams, paras, ("dimer", "DIMER", "ts"))
 
         self.hvp_fn = hvp_fn if self.params.use_hvp else None
 
@@ -337,7 +307,7 @@ class Dimer(JobABC):
             rms_frot = float(math.sqrt(np.mean(F_rot * F_rot)))
 
             # convergence of rotation
-            if (max_frot < p.rot_fmax_th) and (rms_frot < p.rot_frms_th):
+            if (max_frot < p.rot_f_max_th) and (rms_frot < p.rot_f_rms_th):
                 return n_cur, max_frot, rms_frot
 
             # gradient descent on kappa: n <- n - α * F_rot (and renormalize)
@@ -400,8 +370,8 @@ class Dimer(JobABC):
         ], self.output)
 
         # ------------------ ensure PRFO-style thresholds exist ------------------
-        if not hasattr(self.atoms, "f_max_th"):  self.atoms.f_max_th  = p.fmax_th
-        if not hasattr(self.atoms, "f_rms_th"):  self.atoms.f_rms_th  = p.frms_th
+        if not hasattr(self.atoms, "f_max_th"):  self.atoms.f_max_th  = p.f_max_th
+        if not hasattr(self.atoms, "f_rms_th"):  self.atoms.f_rms_th  = p.f_rms_th
         if not hasattr(self.atoms, "dp_max_th"): self.atoms.dp_max_th = 1.8e-3
         if not hasattr(self.atoms, "dp_rms_th"): self.atoms.dp_rms_th = 1.2e-3
 
@@ -436,7 +406,7 @@ class Dimer(JobABC):
                 rms_frot = float(torch.sqrt(torch.mean(F_rot_t * F_rot_t)).detach().cpu().item())
 
                 # convergence of rotation
-                if (max_frot <= p.rot_fmax_th) and (rms_frot <= p.rot_frms_th):
+                if (max_frot <= p.rot_f_max_th) and (rms_frot <= p.rot_f_rms_th):
                     break
 
                 # gradient descent on kappa in orientation space, then re-normalize (and rigid-body remove if requested)

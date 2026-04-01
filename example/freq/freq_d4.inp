@@ -1,5 +1,4 @@
 #model=ANI-2x
-#jobtype=freq
 #d4=true
 
 C               -0.8675              -1.1212               0.1451

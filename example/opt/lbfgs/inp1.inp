@@ -1,5 +1,5 @@
 #model=uma
-#opt()
+#opt(method=lbfgs)
 #device=gpu0
 
 C      -0.77812600     -1.06756100      0.32105900

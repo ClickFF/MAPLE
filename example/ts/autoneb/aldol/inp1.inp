@@ -1,0 +1,12 @@
+#model=aimnet2nse
+#ts(method=autoneb)
+#device=gpu0
+
+XYZ -1 1 /home/user/software/MAPLE/example/ts/autoneb/aldol/rec.xyz
+
+XYZ -1 1 /home/user/software/MAPLE/example/ts/autoneb/aldol/im.xyz
+
+XYZ -1 1 /home/user/software/MAPLE/example/ts/autoneb/aldol/pr.xyz
+
+
+

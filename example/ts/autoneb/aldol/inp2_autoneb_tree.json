@@ -1,0 +1,110 @@
+{
+  "root": {
+    "status": "split",
+    "depth": 0,
+    "n_images": 52,
+    "parent": null,
+    "children": [
+      "root_L",
+      "root_R"
+    ],
+    "hei_idx": 50,
+    "iteration": 50
+  },
+  "root_L": {
+    "status": "converged",
+    "depth": 1,
+    "n_images": 31,
+    "parent": "root",
+    "children": [
+      "root_L_L",
+      "root_L_R"
+    ],
+    "hei_idx": 1,
+    "iteration": 152
+  },
+  "root_R": {
+    "status": "split",
+    "depth": 1,
+    "n_images": 54,
+    "parent": "root",
+    "children": [
+      "root_R_L",
+      "root_R_R"
+    ],
+    "hei_idx": 52,
+    "iteration": 150
+  },
+  "root_L_L": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 8,
+    "parent": "root_L",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 2
+  },
+  "root_L_R": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 24,
+    "parent": "root_L",
+    "children": [],
+    "hei_idx": 2,
+    "iteration": 6
+  },
+  "root_L_R_L": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 29,
+    "parent": "root_L_R",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 48
+  },
+  "root_L_R_R": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 3,
+    "parent": "root_L_R",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 4
+  },
+  "root_L_L_L": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 7,
+    "parent": "root_L_L",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 2
+  },
+  "root_L_L_R": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 18,
+    "parent": "root_L_L",
+    "children": [],
+    "hei_idx": 2,
+    "iteration": 1
+  },
+  "root_R_L": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 52,
+    "parent": "root_R",
+    "children": [],
+    "hei_idx": 9,
+    "iteration": 95
+  },
+  "root_R_R": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 17,
+    "parent": "root_R",
+    "children": [],
+    "hei_idx": 15,
+    "iteration": 2
+  }
+}

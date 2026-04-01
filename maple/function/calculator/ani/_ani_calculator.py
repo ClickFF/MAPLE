@@ -47,7 +47,7 @@ class ANICalculator(CalcABC):
         self.dtype = torch.float32
         self.overwrite = overwrite
         self.d4 = d4
-        self.hessian: str = 'analytic'  # 'analytic' or 'numerical'
+        self.hessian: str = 'numerical'  # 'analytic' or 'numerical'
 
         # Initialize implicit solvent
         self.implicit_solv_init(implicit=implicit, solvent=solvent)

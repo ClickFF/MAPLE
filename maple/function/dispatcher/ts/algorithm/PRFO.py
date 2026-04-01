@@ -116,41 +116,6 @@ def append_xyz_trajectory(filename: str, atoms: Atoms, energy: Optional[float] =
         for s, (x, y, z) in zip(symbols, pos):
             f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
-def _lower_keys(d):
-    """Return a shallow copy with all string keys lowered (ignore non-str keys)."""
-    if not isinstance(d, dict):
-        return {}
-    return {(k.lower() if isinstance(k, str) else k): v for k, v in d.items()}
-
-def _select_subdict(paras: dict, name_aliases: tuple) -> dict:
-    """
-    Extract a sub-dict by aliases. E.g., name_aliases=("prfo","PRFO").
-    Fallback to {} if not present.
-    """
-    if not isinstance(paras, dict):
-        return {}
-    low = _lower_keys(paras)
-    for alias in name_aliases:
-        key = alias.lower()
-        if key in low and isinstance(low[key], dict):
-            return low[key]
-    return low
-
-def _update_dataclass_from_dict(dc_obj, d: dict, *, log_prefix: str, output: str):
-    """
-    Update dataclass fields from dict keys that match exactly (case-insensitive).
-    Unknown keys are ignored.
-    """
-    if not isinstance(d, dict):
-        return dc_obj
-    low = _lower_keys(d)
-    from dataclasses import fields
-    fld_names = {f.name.lower(): f.name for f in fields(dc_obj)}
-    for k_low, v in low.items():
-        if k_low in fld_names:
-            setattr(dc_obj, fld_names[k_low], v)
-    return dc_obj
-
 # =============================================================================
 # ------------------------------- PRFO Core -----------------------------------
 # =============================================================================
@@ -423,52 +388,27 @@ class PRFOParams:
 class PRFO(JobABC):
     """
     Transition state search using Dual-Shift PRFO with trust region adaptation.
-    
+
     The optimization is performed in mass-weighted coordinates for the step
     computation and trust-region enforcement, while geometry updates are done
     in Cartesian coordinates.
-    
-    Parameters
-    ----------
-    output : str
-        Output file path
-    atoms : Atoms
-        Initial TS guess geometry with calculator attached
-    params : PRFOParams, optional
-        PRFO parameters (uses defaults if not provided)
-    paras : dict, optional
-        Dictionary for parameter overrides
     """
-    
+
     def __init__(self,
                  output: str,
                  atoms: Atoms,
-                 params: Optional[PRFOParams] = None,
                  paras: Optional[dict] = None):
         super().__init__(output)
-        
-        # Store initial geometry
         self.atoms = atoms
-        
-        # Initialize with built-in defaults
-        self.params = params if params is not None else PRFOParams()
-        
-        # Apply overrides from paras dict if provided
-        if isinstance(paras, dict):
-            prfo_dict = _select_subdict(paras, ("prfo", "PRFO", "ts", "TS"))
-            _update_dataclass_from_dict(self.params, prfo_dict,
-                                       log_prefix="PRFO", output=self.output)
-        
+
+        # Initialize params from paras dict
+        self.params = self._init_params(PRFOParams, paras, ("prfo", "PRFO", "ts"))
+
         # Override convergence thresholds from atoms if available
-        if hasattr(atoms, 'f_max_th'):
-            self.params.f_max_th = atoms.f_max_th
-        if hasattr(atoms, 'f_rms_th'):
-            self.params.f_rms_th = atoms.f_rms_th
-        if hasattr(atoms, 'dp_max_th'):
-            self.params.dp_max_th = atoms.dp_max_th
-        if hasattr(atoms, 'dp_rms_th'):
-            self.params.dp_rms_th = atoms.dp_rms_th
-        
+        for attr in ('f_max_th', 'f_rms_th', 'dp_max_th', 'dp_rms_th'):
+            if hasattr(atoms, attr):
+                setattr(self.params, attr, getattr(atoms, attr))
+
         # Mode tracking
         self.tracked_mode_vec_mw = None
         self.tracked_mode_idx = None

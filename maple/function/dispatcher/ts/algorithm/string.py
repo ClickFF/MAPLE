@@ -18,7 +18,7 @@ Units:
 from __future__ import annotations
 import os
 import copy
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
 import numpy as np
@@ -291,7 +291,7 @@ class GSMParams:
     grow_backtrack: float = 0.5           # backtracking factor for step
     grow_relax_iters: int = 10            # mini-relax LBFGS iterations (orthogonal)
     grow_relax_tol: float = 2.5e-3        # |grad_perp| threshold for local convergence
-    grow_energy_toll: float = 1.0e-3      # forbid large uphill during prediction (Eh)
+    grow_energy_tol: float = 1.0e-3       # forbid large uphill during prediction (Eh)
     pause_imbalance: int = 2              # if |nL - nR| > this, pause longer side
     refine_end_every: int = 3             # every K growth iters, re-opt last image (orthogonal)
 
@@ -307,7 +307,7 @@ class GSMParams:
     string_f_rms_th: float = 1.0e-3
     lbfgs_memory: int = 7
     lbfgs_curvature: float = 70.0
-    lbfgs_maxstep: float = 0.2
+    lbfgs_max_step: float = 0.2
     reparam_every: int = 3
 
     # ---- CI-STRING ----
@@ -341,19 +341,16 @@ class GSM(JobABC):
     """
 
     def __init__(self, output: str, atoms_R: Atoms, atoms_P: Atoms,
-                 params: Optional[GSMParams] = None, paras: Optional[dict] = None):
+                 paras: Optional[dict] = None):
         super().__init__(output)
         self.atoms_R = atoms_R
         self.atoms_P = atoms_P
         self.atoms_R.calc = atoms_R.calc
         self.atoms_P.calc = atoms_P.calc
-        self.params = params if params is not None else GSMParams()
-        if isinstance(paras, dict):
-            low = {(k.lower() if isinstance(k, str) else k): v for k, v in paras.items()}
-            for f in fields(self.params):
-                name = f.name.lower()
-                if name in low:
-                    setattr(self.params, f.name, low[name])
+
+        # Initialize params from paras dict
+        self.params = self._init_params(GSMParams, paras, ("gsm", "GSM", "string", "STRING", "ts"))
+
         if self.params.n_images < 2:
             raise ValueError("n_images must be >= 2")
 
@@ -484,7 +481,7 @@ class GSM(JobABC):
             maxFperp_pred = float(np.max(np.abs(F_perp)))
 
             E_pred = float(trial.get_potential_energy(force_consistent=True))
-            uphill = (E_pred - E_last) > p.grow_energy_toll
+            uphill = (E_pred - E_last) > p.grow_energy_tol
 
             # backtrack on step if energy is too uphill or force is too large
             if (uphill or maxFperp_pred > 10.0 * p.grow_relax_tol) and ds > p.grow_step_min:

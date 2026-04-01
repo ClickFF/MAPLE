@@ -35,10 +35,18 @@ class Dispatcher():
         elif jobtype == 'sp':
             from .sp import SinglePoint
 
-            if isinstance(atoms, (list, Molecules)):
-                raise NotImplementedError('For single point energy job, only one Atoms object is allowed.')
-            sp = SinglePoint(output=output, atoms=atoms)
-            sp.run()
+            # Handle trajectory/multiple structures
+            if isinstance(atoms, Molecules):
+                atoms_input = atoms.multiatoms
+                sp = SinglePoint(output=output, atoms=atoms_input, paras=commandcontrol)
+                sp.run()
+            elif isinstance(atoms, list):
+                sp = SinglePoint(output=output, atoms=atoms, paras=commandcontrol)
+                sp.run()
+            else:
+                # Single structure (backward compatibility)
+                sp = SinglePoint(output=output, atoms=atoms, paras=commandcontrol)
+                sp.run()
 
         elif jobtype == 'scan':
             from .scan import Scan
@@ -68,7 +76,7 @@ class Dispatcher():
             # TS job allows Molecules object for methods like NEB, STRING, DIMER
             if isinstance(atoms, (list, Molecules)):
                 method = commandcontrol.params.get('method')
-                if method in ['neb', 'string', 'dimer']:
+                if method in ['neb', 'string', 'dimer', 'afir', 'descafir', 'autoneb']:
                     # Convert Molecules to its internal list if needed
                     atoms_input = atoms.multiatoms if isinstance(atoms, Molecules) else atoms
                     ts = TransitionState(output=output, atoms=atoms_input, method=method, params=commandcontrol.params)
@@ -90,6 +98,31 @@ class Dispatcher():
                 raise NotImplementedError('For IRC job, only one Atoms object is allowed.')
             irc = IRC(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
             irc.run()
+
+        elif jobtype == 'md':
+            from .md.ensemble.nve import NVE
+            from .md.ensemble.nvt import NVT
+            from .md.ensemble.npt import NPT
+
+            if isinstance(atoms, (list, Molecules)):
+                raise NotImplementedError('For MD job, only one Atoms object is allowed.')
+
+            if 'charge' not in atoms.info or 'mult' not in atoms.info:
+                raise ValueError(
+                    "MD requires explicit charge and multiplicity. "
+                    "Provide either 'XYZ <charge> <mult> <path>' or an inline 'charge mult' line before coordinates."
+                )
+
+            ensemble = commandcontrol.params.get('ensemble', 'nve').lower()
+            if ensemble == 'nve':
+                md = NVE(output=output, atoms=atoms, paras=commandcontrol.params)
+            elif ensemble == 'nvt':
+                md = NVT(output=output, atoms=atoms, paras=commandcontrol.params)
+            elif ensemble == 'npt':
+                md = NPT(output=output, atoms=atoms, paras=commandcontrol.params)
+            else:
+                raise ValueError(f"Unknown MD ensemble: '{ensemble}'")
+            md.run()
             
             
         else:

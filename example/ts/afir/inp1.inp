@@ -1,0 +1,10 @@
+#model=aimnet2nse
+#ts(method=afir)
+#device=gpu0
+
+XYZ /home/user/software/MAPLE/example/ts/neb/react.xyz
+
+XYZ /home/user/software/MAPLE/example/ts/neb/prod.xyz
+
+
+

@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
 from ase import Atoms
 from .logger import log_info
+from ...jobABC import JobABC
 
 
 # ==============================================
@@ -50,37 +51,6 @@ def vec1d(x, n_expected=None):
 	return v
 
 
-def _lower_keys(d):
-	"""Return a copy of dict with all string keys lowercased."""
-	if not isinstance(d, dict):
-		return {}
-	return {(k.lower() if isinstance(k, str) else k): v for k, v in d.items()}
-
-
-def _select_subdict(paras: dict, name_aliases: tuple[str, ...]) -> dict:
-	"""Extract a sub-dict using aliases (e.g., 'rfo'/'RFO')."""
-	if not isinstance(paras, dict):
-		return {}
-	low = _lower_keys(paras)
-	for alias in name_aliases:
-		key = alias.lower()
-		if key in low and isinstance(low[key], dict):
-			return low[key]
-	return low
-
-
-def _update_dataclass_from_dict(dc_obj, d: dict):
-	"""Update a dataclass instance from a dict (case-insensitive keys)."""
-	if not isinstance(d, dict):
-		return dc_obj
-	low = _lower_keys(d)
-	field_map = {f.name.lower(): f.name for f in fields(dc_obj)}
-	for k_low, v in low.items():
-		if k_low in field_map:
-			setattr(dc_obj, field_map[k_low], v)
-	return dc_obj
-
-
 # ==============================================
 # RFO parameters (minimization-only, RS trust region)
 # ==============================================
@@ -107,39 +77,21 @@ class RFOParams:
 
 
 # ==============================================
-# RFO Minimizer (NEB-style init, run() without args)
+# RFO Minimizer
 # ==============================================
-class RFO:
+class RFO(JobABC):
 	"""
 	Rational Function Optimization (RFO) for local minimization with
-	PRFO-style trust region (RS) logic, mass-weighting, and rho-based
-	acceptance/rejection of steps.
-
-	Design:
-	- NEB-style init (__init__ accepts atoms/output/params/paras)
-	- run(self) has no arguments; everything is stored in the instance
-	- Single-shift RFO (no TS partition), suitable for minima search
-	- Trust region enforced in mass-weighted coordinates
-	- ρ logic and trajectory/logging consistent with your PRFO/LBFGS style
+	trust region logic, mass-weighting, and rho-based acceptance/rejection.
 	"""
 
 	def __init__(self,
 				 atoms: Atoms,
 				 output: str,
-				 params: Optional[RFOParams] = None,
 				 paras: Optional[dict] = None):
+		super().__init__(output)
 		self.atoms = atoms
-		self.output = output
-
-		# 1) defaults
-		self.params = params if params is not None else RFOParams()
-
-		# 2) allow overrides via paras dict (support "rfo"/"RFO" or flat)
-		if isinstance(paras, dict):
-			rfo_dict = _select_subdict(paras, ("rfo", "RFO"))
-			_update_dataclass_from_dict(self.params, rfo_dict)
-
-		# internal state
+		self.params = self._init_params(RFOParams, paras, ("rfo", "RFO", "opt"))
 		self.trust_radius = float(self.params.trust_radius_init)
 
 	# ----------------------------------------------------------

@@ -125,8 +125,8 @@ class GSParams:
     hessian_recalc: Optional[int] = None
 
     # Convergence on forces in Cartesian space (Eh/Å)
-    tol_maxf: float = 2e-3
-    tol_rmsf: float = 5e-4
+    f_max_th: float = 2e-3
+    f_rms_th: float = 5e-4
 
     # Output controls
     print_each: bool = True
@@ -177,8 +177,10 @@ class GS:
                 "micro_step_thresh": "micro_step_thresh",
                 "hessian_recalc": "hessian_recalc",
                 "target_mode": "target_mode",
-                "tol_maxf": "tol_maxf",
-                "tol_rmsf": "tol_rmsf",
+                "f_max_th": "f_max_th",
+                "f_rms_th": "f_rms_th",
+                "tol_maxf": "f_max_th",       # backward compatibility
+                "tol_rmsf": "f_rms_th",       # backward compatibility
                 "print_each": "print_each",
                 "write_traj": "write_traj",
             }
@@ -488,7 +490,7 @@ class GS:
         title = "FORWARD GS-IRC" if forward else "BACKWARD GS-IRC"
 
         self._print_header(title)
-        self._print_conv_thresholds(p.tol_maxf, p.tol_rmsf)
+        self._print_conv_thresholds(p.f_max_th, p.f_rms_th)
 
         # Initial MW coordinates at TS
         q_ts_mw = self._mw_from_cart(q_ts_cart)
@@ -592,7 +594,7 @@ class GS:
             )
 
             # Convergence in terms of Cartesian forces
-            if (maxF <= p.tol_maxf) and (rmsF <= p.tol_rmsf):
+            if (maxF <= p.f_max_th) and (rmsF <= p.f_rms_th):
                 self._print_hurray()
                 break
 
@@ -703,11 +705,11 @@ class GS:
             self.output,
         )
 
-    def _print_conv_thresholds(self, tol_maxf: float, tol_rmsf: float):
+    def _print_conv_thresholds(self, f_max_th: float, f_rms_th: float):
         log_info(
             [
                 "Iteration    E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G) \n",
-                f"Convergence thresholds                {tol_maxf:0.6f}  {tol_rmsf:0.6f}\n",
+                f"Convergence thresholds                {f_max_th:0.6f}  {f_rms_th:0.6f}\n",
             ],
             self.output,
         )

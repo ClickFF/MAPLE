@@ -1,0 +1,11 @@
+{
+  "root": {
+    "status": "converged",
+    "depth": 0,
+    "n_images": 27,
+    "parent": null,
+    "children": [],
+    "hei_idx": 12,
+    "iteration": 78
+  }
+}

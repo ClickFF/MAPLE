@@ -1,5 +1,4 @@
 #model=ANI-2x
-#jobtype=opt
 #d4=true
 
 C      -0.77812600     -1.06756100      0.32105900

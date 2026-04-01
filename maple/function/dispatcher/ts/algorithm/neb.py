@@ -117,46 +117,6 @@ def write_all_images_xyz(filename: str, images: List[Atoms], energies: Optional[
 
 
 
-# --- add to your neb.py (or the module where NEB lives) ---
-
-from dataclasses import asdict, fields
-
-def _lower_keys(d):
-    """Return a shallow copy with all string keys lowered (ignore non-str keys)."""
-    if not isinstance(d, dict):
-        return {}
-    return { (k.lower() if isinstance(k, str) else k): v for k, v in d.items() }
-
-def _select_subdict(paras: dict, name_aliases: tuple[str, ...]) -> dict:
-    """
-    Extract a sub-dict by aliases. E.g., name_aliases=("neb","NEB").
-    Fallback to {} if not present.
-    """
-    if not isinstance(paras, dict):
-        return {}
-    # exact (case-insensitive) sub-dict
-    low = _lower_keys(paras)
-    for alias in name_aliases:
-        key = alias.lower()
-        if key in low and isinstance(low[key], dict):
-            return low[key]
-    # also support flat (top-level) style
-    return low
-
-def _update_dataclass_from_dict(dc_obj, d: dict, *, log_prefix: str, output:str,logger=None):
-    """
-    Update dataclass fields from dict keys that match exactly (case-insensitive).
-    Unknown keys are ignored (optionally logged).
-    """
-    if not isinstance(d, dict):
-        return dc_obj
-    low = _lower_keys(d)
-    fld_names = {f.name.lower(): f.name for f in fields(dc_obj)}
-    for k_low, v in low.items():
-        if k_low in fld_names:
-            setattr(dc_obj, fld_names[k_low], v)
-            
-    return dc_obj
 
 
 
@@ -220,13 +180,13 @@ class NEBParams:
     # IDPP control
     ifidpp: int = 1                     # 1: use IDPP for initial path, 0: linear interp.
     # Convergence on projected forces
-    neb_f_max_th: float = 2e-2 #9.5e-3           # max(|Fp|) threshold
-    neb_f_rms_th: float = 1e-2 #5e-3             # RMS(Fp) threshold
+    neb_f_max_th: float = 9.5e-3           # max(|Fp|) threshold
+    neb_f_rms_th: float = 5e-3             # RMS(Fp) threshold
     initial_opt: bool = False              # do initial relaxation of endpoints
     refine: Optional[str] = None           # 'cineb' or 'nebts' or None
     # CINEB-specific
-    cineb_f_max_th: float = 3e-03 #1e-2 #3e-03          # max(|Fp|) threshold for CINEB
-    cineb_f_rms_th: float = 2e-03 #1e-2 #2e-03          # RMS(Fp) threshold for CINEB
+    cineb_f_max_th: float = 1e-2 #3e-03          # max(|Fp|) threshold for CINEB
+    cineb_f_rms_th: float = 1e-2 #2e-03          # RMS(Fp) threshold for CINEB
     cilbfgs_m: int = 20                    # memory size for L-BFGS in CINEB
     cistep0: float = 5e-3                  # initial step length for CINEB
 
@@ -582,28 +542,20 @@ class LBFGSDriver:
 class NEB(JobABC):
     def __init__(self,
                 output: str,
-                atoms_or_molecules,  # Accept either Atoms or Molecules
-                params: Optional[NEBParams] = None,
+                atoms_or_molecules,
                 paras: Optional[dict] = None):
         super().__init__(output)
-        
-        # 1) Handle Molecules input
+
+        # Handle Molecules input
         if isinstance(atoms_or_molecules, Molecules):
             self.input_images = atoms_or_molecules.multiatoms
             self.atoms_R = None
             self.atoms_P = None
         else:
-            # Legacy: two separate Atoms objects (atoms_R, atoms_P)
-            # Keep backward compatibility if needed
             raise ValueError("Please provide Molecules object containing all images")
-        
-        # 2) Start from built-in defaults
-        self.params = params if params is not None else NEBParams()
 
-        # 3) Apply overrides from paras (if provided)
-        if isinstance(paras, dict):
-            neb_dict = _select_subdict(paras, ("neb", "NEB"))
-            _update_dataclass_from_dict(self.params, neb_dict, log_prefix="NEB", output=self.output, logger=log_info)
+        # Initialize params from paras dict
+        self.params = self._init_params(NEBParams, paras, ("neb", "NEB", "ts"))
 
         # Safety: minimal guard
         if self.params.n_images < 1:

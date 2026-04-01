@@ -94,16 +94,23 @@ class InputReader():
             with open(self.input, 'r') as f:
                 raw_lines = f.readlines()
 
-            # Regex used to detect coordinate-like lines
+            # Regex used to detect coordinate-like lines.
+            # Matches "Elem x y z" (4 columns) or "Elem x y z vx vy vz" (7 columns,
+            # the latter produced by MD trajectory frames that include velocities).
             atom_line_re = re.compile(
                 r'^\s*([A-Za-z][a-z]?)\s+'
                 r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+'
                 r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+'
-                r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$'
+                r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)'
+                r'(?:\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?){0,3}'
+                r'\s*$'
             )
 
             def is_settings_line(s: str) -> bool:
                 return s.lstrip().startswith('#')
+
+            # Regex for charge/multiplicity line: two integers (e.g. "0 1", "-1 2")
+            charge_mult_re = re.compile(r'^\s*[+-]?\d+\s+\d+\s*$')
 
             def is_xyz_ref(s: str) -> bool:
                 upper = s.upper()
@@ -113,6 +120,8 @@ class InputReader():
                 if s == '' or s == '&':
                     return True
                 if is_xyz_ref(s):
+                    return True
+                if charge_mult_re.match(s):
                     return True
                 return atom_line_re.match(s) is not None
 
@@ -257,24 +266,14 @@ class InputReader():
         return expanded
 
     def log_error(self, error_message: str) -> None:
-        """
-        Logs error messages to the output file.
-
-        Args:
-            error_message: The error message to log.
-        """
+        """Logs error messages to the output file."""
         with open(self.output, 'a') as file:
             file.write(f"ERROR: {error_message}\n")
 
     def log_info(self, info_message: list) -> None:
-        """
-        Logs info messages to the output file.
-
-        Args:
-            info_message: The info message to log.
-        """
+        """Logs info messages to the output file."""
         with open(self.output, 'a') as file:
-            for info in info_message:   
+            for info in info_message:
                 file.write(f"{info}")
 
     def settings_command(self, settings: list):
@@ -287,29 +286,43 @@ class InputReader():
             params = cc.as_dict()
 
             # Assign key parameters
-            self.model = params.get("model").lower()
+            # Extract model name (handle both string and dict formats)
+            model_val = params.get("model")
+            if isinstance(model_val, dict):
+                self.model = model_val.get('name', '').lower()
+                self.model_params = model_val
+            else:
+                self.model = model_val.lower() if model_val else None
+                self.model_params = None
 
             dev_str: str = params.get("device", "cpu").lower()
 
-            # Automatically handle GPU/CPU selection
+            # Automatically handle device selection with availability checks
             if dev_str.startswith("gpu") or dev_str.startswith("cuda"):
                 idx = ''.join([c for c in dev_str if c.isdigit()])
                 cuda_idx = idx if idx != '' else '0'
                 if torch.cuda.is_available():
                     self.device = torch.device(f'cuda:{cuda_idx}')
                 else:
-                    self.log_info("\nWARNING: CUDA is not available. Falling back to CPU.\n")
+                    self.log_info(["\nWARNING: CUDA is not available. Falling back to CPU.\n"])
+                    self.device = torch.device('cpu')
+            elif dev_str == "mps":
+                if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    self.device = torch.device('mps')
+                else:
+                    self.log_info(["\nWARNING: MPS is not available. Falling back to CPU.\n"])
                     self.device = torch.device('cpu')
             else:
                 try:
                     self.device = torch.device(dev_str)
                 except:
-                    self.log_info("\nWARNING: Unrecognized device. Falling back to CPU.\n")
+                    self.log_info(["\nWARNING: Unrecognized device. Falling back to CPU.\n"])
                     self.device = torch.device('cpu')
 
-            
+
             self.d4 = params.get("d4", False)
             self.jobtype = params.get("task")  # ← now replaces jobtype
+            self.pbc = params.get("pbc", None)  # PBC cell dimensions [X, Y, Z]
 
 
             self.log_info([cc.summary()])
@@ -348,13 +361,19 @@ class InputReader():
             List[Atoms]: if multiple structures are present (will be converted to Molecules in __call__)
         """
 
-        # Regex for atomic line: element + 3 floats (supports scientific notation)
+        # Regex for atomic line: element + 3 position floats + up to 3 optional velocity floats.
+        # Matches both "Elem x y z" (plain XYZ) and "Elem x y z vx vy vz" (MD with velocities).
         atom_pattern = re.compile(
             r'^\s*([A-Za-z][a-z]?)\s+'
             r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+'
             r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+'
-            r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$'
+            r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)'
+            r'(?:\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?){0,3}'
+            r'\s*$'
         )
+
+        # Regex for charge and multiplicity line: two integers (charge can be negative)
+        charge_mult_pattern = re.compile(r'^\s*([+-]?\d+)\s+(\d+)\s*$')
 
         info_message = [f'\n{"Coordinates".center(70)}\n', '*' * 70 + '\n']
 
@@ -384,6 +403,9 @@ class InputReader():
             atoms_list: List[Atoms] = []
             group_counter = 0
 
+            # Get input file directory for resolving relative paths
+            input_dir = os.path.dirname(self.input)
+
             for block in blocks:
                 # Normalize tokens for this block
                 tokens = [b.strip() for b in block if b.strip()]
@@ -406,16 +428,35 @@ class InputReader():
                         
                         if keyword == 'XYZTRAJ':
                             # Read trajectory file, returns Molecules object
-                            molecules_obj = XYZTrajReader(file_path)
+                            molecules_obj = XYZTrajReader(file_path, base_dir=input_dir)
+
+                            # Apply PBC to all frames if specified
+                            if self.pbc is not None:
+                                from ase.cell import Cell
+                                for traj_atoms in molecules_obj.multiatoms:
+                                    traj_atoms.set_pbc([True, True, True])
+                                    # PBC format: [a, b, c, alpha, beta, gamma]
+                                    traj_atoms.set_cell(Cell.fromcellpar(self.pbc))
+
                             # Add all frames from the trajectory to atoms_list
                             atoms_list.extend(molecules_obj.multiatoms)
-                            
+
                             group_counter += len(molecules_obj.multiatoms)
                             info_message.append(f"\nLoaded {len(molecules_obj.multiatoms)} frames from trajectory: {file_path}\n")
+                            if self.pbc is not None:
+                                info_message.append(f"PBC applied to trajectory: cell = [{self.pbc[0]:.3f}, {self.pbc[1]:.3f}, {self.pbc[2]:.3f}] Angstrom\n")
                             info_message.append('-' * 20 + '\n')
                         elif keyword == 'XYZ':
                             # Regular XYZ file
-                            atoms = XYZReader(file_path)
+                            atoms = XYZReader(file_path, base_dir=input_dir)
+
+                            # Apply PBC if specified
+                            if self.pbc is not None:
+                                from ase.cell import Cell
+                                atoms.set_pbc([True, True, True])
+                                # PBC format: [a, b, c, alpha, beta, gamma]
+                                atoms.set_cell(Cell.fromcellpar(self.pbc))
+
                             atoms_list.append(atoms)
 
                         # Multiple structures from multiple files
@@ -439,6 +480,24 @@ class InputReader():
                 # Case 3: inline coordinates
                 elements: List[str] = []
                 coords: List[tuple] = []
+                velocities_inline: List[tuple] = []
+                charge = None
+                mult = None
+
+                # Check if first line contains charge and multiplicity
+                if tokens:
+                    first_line_match = charge_mult_pattern.match(tokens[0])
+                    if first_line_match:
+                        charge = int(first_line_match.group(1))
+                        mult = int(first_line_match.group(2))
+                        tokens = tokens[1:]  # Remove charge/mult line from processing
+
+                        # Validate multiplicity
+                        if mult < 1:
+                            raise ValueError(f"Invalid multiplicity: {mult}. Must be >= 1")
+
+                # Parse atomic coordinates (and optional velocities in columns 5-7)
+                _float_re = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?')
                 for line in tokens:
                     m = atom_pattern.match(line)
                     if not m:
@@ -449,12 +508,40 @@ class InputReader():
                     z = float(m.group(4))
                     elements.append(elem)
                     coords.append((x, y, z))
+                    # Detect velocity columns (7-column format: Elem x y z vx vy vz)
+                    all_nums = _float_re.findall(line[line.index(m.group(1)) + len(m.group(1)):])
+                    if len(all_nums) == 6:
+                        velocities_inline.append(tuple(float(v) for v in all_nums[3:6]))
 
+                # Create Atoms object
                 atoms = Atoms(symbols=elements, positions=np.array(coords, dtype=np.float64))
+
+                # If all atom lines carried velocity columns, store them in atoms.arrays.
+                # The MD ensembles check for 'velocities' in atoms.arrays when
+                # init_velocities=False, so these will be used automatically.
+                if len(velocities_inline) == len(elements):
+                    atoms.arrays['velocities'] = np.array(velocities_inline, dtype=np.float64)
+
+                # Store charge and multiplicity if provided
+                if charge is not None:
+                    atoms.info['charge'] = charge
+                if mult is not None:
+                    atoms.info['mult'] = mult
+                    atoms.info['spin'] = (mult - 1) / 2
+
+                # Apply PBC if specified
+                if self.pbc is not None:
+                    from ase.cell import Cell
+                    atoms.set_pbc([True, True, True])
+                    # PBC format: [a, b, c, alpha, beta, gamma]
+                    atoms.set_cell(Cell.fromcellpar(self.pbc))
+
                 atoms_list.append(atoms)
 
                 group_counter += 1
                 info_message.append(f"\nGroup {group_counter} (inline)\n")
+                if charge is not None and mult is not None:
+                    info_message.append(f"Charge: {charge}, Multiplicity: {mult}\n")
                 info_message.append('-' * 20 + '\n')
                 for i, (e, (x, y, z)) in enumerate(zip(elements, coords), start=1):
                     info_message.append(f"{i:<4} {e:<2} {x:>20.6f} {y:>20.6f} {z:>20.6f}\n")

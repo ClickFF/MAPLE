@@ -1,0 +1,6 @@
+#model=uma(task=oc20)
+#opt(method=lbfgs)
+#device=gpu0
+#pbc(18.19160,18.19160,24.90230,90,90,120)
+
+XYZ 0 1 /home/user/software/MAPLE/example/opt/lbfgs/pbc_cu.xyz

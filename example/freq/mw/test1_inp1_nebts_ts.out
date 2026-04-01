@@ -1,46 +1,36 @@
-Preprocessing the settings ...
-Model: ANI-1ccx.
-Job type: freq.
-GPU ID is set. Using GPU to calculate.
+
+**********************************************************************
+*                                                                    *
+*                        M   A   P   L   E                           *
+*                                                                    *
+*      MAchine-learning Potential for Landscape Exploration          *
+*                                                                    *
+*                                                                    *
+*      © 2025 University of Pittsburgh. All rights reserved.         *
+*      Licensed under CC BY 4.0 for academic use.                    *
+*                                                                    *
+*      Principal Developer:  Xujian Wang                             *
+*                                                                    *
+**********************************************************************
+
+
+Parsing # commands...
+Global parameter: model = ANI-1xnr
+Task set to 'freq'
+Global parameter: device = gpu0
+Parsed configuration:
+----------------------------------------
+Task: freq
+model          : ani1xnr
+method         : nonmw
+temperature    : 298
+pressure_kpa   : 300
+ilowfreq       : 2
+verbosity      : 0
+treat_imag_as_real: False
+device         : gpu0
+ilow           : 0
 
                              Coordinates                              
 **********************************************************************
- 1    C                  0.8617                0.7712                -0.1728
- 2    H                  0.6613                1.5337                -0.9376
- 3    O                  0.5524                0.9876                 1.1207
- 4    C                  1.3421               -0.5674                -0.1822
- 5    H                  0.8187               -0.2250                 1.0871
- 6    H                  1.0223               -1.3467                -0.8857
- 7    H                  2.3217               -0.7022                 0.2975
-
-Loading the Machine Learning Potential Model...
-Loading ANI model (ANI-1ccx) successfully.
-Using GPU for calculation (cuda:0).
-
-Thermochemistry Summary
-============================================================
-Working pressure: 300.000 kPa
-Zero-point vibrational energy:           39.433947 kcal/mol
-Translational enthalpy at 298 K:        1.480467 kcal/mol
-Rotational enthalpy at 298 K:           0.888280 kcal/mol
-Vibrational thermal enthalpy at 298 K:     3.560850 kcal/mol
-Total enthalpy correction at 298 K:     45.363544 kcal/mol
-
-Gibbs free energy correction at 298 K:   -24.642393 kcal/mol
-
-Entropy components (kcal/mol·K):
-  S_trans:   0.035115
-  S_rot:     0.021605
-  S_vib:     0.178199
-  S_total:   0.234919
-============================================================
-
-Vibrational Frequencies (cm⁻¹)
-------------------------------------------------------------
-Imaginary frequencies:   3
-Real frequencies:      18
-------------------------------------------------------------
-  -5328.71i       -1.33i       -0.50i        0.65         1.40         1.58   
-      2.11      1059.63      1785.14      2009.21   
-
-Frequency analysis completedOutput file: C:\Users\18526\maple\example\freq\mw\inp1_nebts_ts.out
+ERROR: XYZ file path must be absolute: C:\Users\18526\maple\example\freq\mw\inp1_nebts_ts.xyz

@@ -1,0 +1,113 @@
+{
+  "root": {
+    "status": "split",
+    "depth": 0,
+    "n_images": 54,
+    "parent": null,
+    "children": [
+      "root_L",
+      "root_R"
+    ],
+    "hei_idx": 52,
+    "iteration": 50
+  },
+  "root_L": {
+    "status": "split",
+    "depth": 1,
+    "n_images": 18,
+    "parent": "root",
+    "children": [
+      "root_L_L",
+      "root_L_R"
+    ],
+    "hei_idx": 2,
+    "iteration": 100
+  },
+  "root_R": {
+    "status": "split",
+    "depth": 1,
+    "n_images": 60,
+    "parent": "root",
+    "children": [
+      "root_R_L",
+      "root_R_R"
+    ],
+    "hei_idx": 43,
+    "iteration": 50
+  },
+  "root_L_L": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 4,
+    "parent": "root_L",
+    "children": [],
+    "hei_idx": 2,
+    "iteration": 2
+  },
+  "root_L_R": {
+    "status": "split",
+    "depth": 2,
+    "n_images": 14,
+    "parent": "root_L",
+    "children": [
+      "root_L_R_L",
+      "root_L_R_R"
+    ],
+    "hei_idx": 1,
+    "iteration": 50
+  },
+  "root_L_L_L": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 14,
+    "parent": "root_L_L",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 2
+  },
+  "root_L_L_R": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 3,
+    "parent": "root_L_L",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 2
+  },
+  "root_L_R_L": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 10,
+    "parent": "root_L_R",
+    "children": [],
+    "hei_idx": 1,
+    "iteration": 6
+  },
+  "root_L_R_R": {
+    "status": "converged",
+    "depth": 3,
+    "n_images": 5,
+    "parent": "root_L_R",
+    "children": [],
+    "hei_idx": 3,
+    "iteration": 2
+  },
+  "root_R_L": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 28,
+    "parent": "root_R",
+    "children": [],
+    "hei_idx": 25,
+    "iteration": 42
+  },
+  "root_R_R": {
+    "status": "converged",
+    "depth": 2,
+    "n_images": 54,
+    "parent": "root_R",
+    "children": [],
+    "hei_idx": 52,
+    "iteration": 182
+  }
+}

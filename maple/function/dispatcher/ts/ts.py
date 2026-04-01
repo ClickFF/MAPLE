@@ -89,5 +89,48 @@ class TransitionState(JobABC):
                 )
                 dimer.run()
                 
+            elif self.method == 'afir':
+                from .algorithm import DSAFIR
+                afir = DSAFIR(
+                    output=self.output,
+                    atoms_R=self.atoms[0],
+                    atoms_P=self.atoms[-1],
+                    paras=self.params
+                )
+                afir.run()
+            elif self.method == 'descafir':
+                from .algorithm import DESCAFIR
+                descafir = DESCAFIR(
+                    output=self.output,
+                    atoms_R=self.atoms[0],
+                    atoms_P=self.atoms[-1],
+                    paras=self.params
+                )
+                descafir.run()
+
+            elif self.method == 'autoneb':
+                # AutoNEB: automated multi-step reaction pathway exploration
+                if isinstance(self.atoms, Molecules):
+                    from .algorithm import AutoNEB
+                    autoneb = AutoNEB(
+                        output=self.output,
+                        atoms_or_molecules=self.atoms,
+                        paras=self.params
+                    )
+                    autoneb.run()
+                elif isinstance(self.atoms, list):
+                    if len(self.atoms) < 2:
+                        raise ValueError('For AutoNEB method, you should provide at least two structures.')
+                    from .algorithm import AutoNEB
+                    molecules = Molecules(self.atoms)
+                    autoneb = AutoNEB(
+                        output=self.output,
+                        atoms_or_molecules=molecules,
+                        paras=self.params
+                    )
+                    autoneb.run()
+                else:
+                    raise ValueError('For AutoNEB method, you should provide a Molecules object or a list of structures.')
+
             else:
-                raise ValueError(f'Method {self.method} not recognized. Available methods are: newton, prfo, neb, string, dimer.')
+                raise ValueError(f'Method {self.method} not recognized. Available methods are: newton, prfo, neb, string, dimer, autoneb.')

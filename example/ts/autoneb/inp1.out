@@ -1,0 +1,118 @@
+
+**********************************************************************
+*                                                                    *
+*                        M   A   P   L   E                           *
+*                                                                    *
+*      MAchine-learning Potential for Landscape Exploration          *
+*                                                                    *
+*                                                                    *
+*      © 2025 University of Pittsburgh. All rights reserved.         *
+*      Licensed under CC BY 4.0 for academic use.                    *
+*                                                                    *
+*      Principal Developer:  Xujian Wang                             *
+*                                                                    *
+**********************************************************************
+
+
+Parsing # commands...
+Global parameter: model = aimnet2nse
+Task set to 'ts'
+Global parameter: device = gpu0
+Parsed configuration:
+----------------------------------------
+Task: ts
+model          : aimnet2nse
+method         : autoneb
+device         : gpu0
+
+                             Coordinates                              
+**********************************************************************
+
+======================================================================
+AutoNEB Parameters
+======================================================================
+n_images:         20
+ang_max:          0.3 Angstrom
+ang_iter:         20
+path_iter:        50
+min_e_drop:       0.001 Eh
+ep_iter:          30
+ep_e_drop:        0.0005 Eh
+autoneb_f_max_th: 0.0095
+autoneb_f_rms_th: 0.005
+max_depth:        5
+max_paths:        10
+======================================================================
+
+
+======================================================================
+Starting AutoNEB Optimization
+======================================================================
+
+Initialized root path with 22 images.
+Energy range: -424.939498 to -424.759596 Eh
+
+----------------------------------------------------------------------
+Optimizing path: root (depth=0, images=22)
+----------------------------------------------------------------------
+  Iter   10  HEI=9  dE=0.128257  max|Fp|=0.035566  RMS(Fp)=0.007928
+  Iter   20  HEI=9  dE=0.117287  max|Fp|=0.022741  RMS(Fp)=0.003438
+
+[Path root] Adaptive insertion: adding 6 image(s)
+  Iter   30  HEI=12  dE=0.114011  max|Fp|=0.024715  RMS(Fp)=0.004522
+  Iter   40  HEI=11  dE=0.109565  max|Fp|=0.016400  RMS(Fp)=0.002319
+
+[Path root] Adaptive insertion: adding 3 image(s)
+  Iter   50  HEI=12  dE=0.112719  max|Fp|=0.039323  RMS(Fp)=0.003258
+  Iter   60  HEI=12  dE=0.111615  max|Fp|=0.019555  RMS(Fp)=0.002947
+
+[Path root] Updated end point to index 26, energy: -424.940978 Eh
+  Iter   70  HEI=12  dE=0.110969  max|Fp|=0.014846  RMS(Fp)=0.002411
+
+[Path root] Converged after 78 iterations.
+
+[Path root] Summary:
+  Images: 27, Iterations: 78
+  HEI index: 12
+  Forward barrier: 69.20 kcal/mol
+  Reaction energy: -5.49 kcal/mol
+
+All paths converged!
+
+======================================================================
+AutoNEB Optimization Complete
+======================================================================
+Total global iterations: 80
+Total paths: 1
+Intermediates found: 0
+
+Wrote global MEP to: /home/user/software/MAPLE/example/ts/autoneb/inp1_autoneb_global_mep.xyz
+Wrote transition states to: /home/user/software/MAPLE/example/ts/autoneb/inp1_autoneb_ts_list.xyz
+Wrote path tree to: /home/user/software/MAPLE/example/ts/autoneb/inp1_autoneb_tree.json
+
+Global MEP Summary:
+  Total images: 27
+  Energy range: -424.940998 to -424.821953 Eh
+  Overall barrier: 69.20 kcal/mol
+
+
+
+Program started: 2026-01-16 13:41:08
+
+======================================================================
+                      TIMING SUMMARY
+======================================================================
+Input Reading.......................................   0.115 s  (   0.2 %)
+  Settings Parsing....................................   0.114 s  (  99.2 %)
+  Coordinate Section Parsing..........................   0.000 s  (   0.4 %)
+  Post-Processing Expansion...........................   0.000 s  (   0.0 %)
+MLP Initialization..................................   0.157 s  (   0.2 %)
+Job Dispatching.....................................  64.029 s  (  99.6 %)
+  Transition State Optimization.......................  64.029 s  ( 100.0 %)
+======================================================================
+Total wall time: 64.302 s
+Total CPU time: 64.218 s
+======================================================================
+
+Program ended: 2026-01-16 13:42:13
+TOTAL RUN TIME: 0 days 0 hours 1 minutes 4 seconds 301 msec

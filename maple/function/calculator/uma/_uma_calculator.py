@@ -1,6 +1,7 @@
 import importlib
 import torch
 import numpy as np
+from functools import partial
 from typing import Literal
 from ase import Atoms
 from ase.calculators.calculator import all_changes
@@ -8,12 +9,18 @@ from ase.calculators.calculator import Calculator
 
 try:
     from fairchem.core import pretrained_mlip
-    from fairchem.core.calculate.ase_calculator import FAIRChemCalculator
+    from fairchem.core.calculate.ase_calculator import FAIRChemCalculator, UMATask, AtomicData
     from fairchem.core.datasets import data_list_collater
 except ImportError:
     raise ImportError("fairchem-core is not installed. Please install it first.")
 
 EV2HARTREE = 1.0 / 27.211386245988
+
+UMA_MODELS_MAP = {
+    "uma-s-1p1": "uma-s-1p1",
+    "uma-m-1p1": "uma-m-1p1",
+    "uma": "uma-s-1p1",
+}
 
 
 class UMACalculator(FAIRChemCalculator):
@@ -29,17 +36,26 @@ class UMACalculator(FAIRChemCalculator):
         overrides: dict | None = None,
         implicit: Literal["gbsa", "none"] = "gbsa",
         solvent: str = 'none',
+        task: str | None = None,
+        size: str | None = None,
+        checkpoint_path: str | None = None,
     ):
         """
         Initialize UMA Calculator.
 
         Args:
             device (torch.device): Target device ('cuda' or 'cpu').
-            model (str): UMA model name or local checkpoint path.
+            model (str): UMA model name.
             overrides (dict, optional): Additional inference configuration overrides.
+            implicit (Literal["gbsa", "none"]): Implicit solvent model.
+            solvent (str): Solvent name for GBSA correction.
+            task (str | None): UMA task type (omol, oc20, omat, omc, odac). Default: omol.
+            size (str | None): UMA model size (uma-s-1p1, uma-m-1p1). Default: uma-s-1p1.
+            checkpoint_path (str | None): Local checkpoint path. When provided, loads
+                from this path directly. Otherwise falls back to FAIRChem pretrained download.
         """
-        UMA_MODELS_MAP = {"uma": "uma-s-1p1"}
-        model = UMA_MODELS_MAP.get(model)
+        # Determine task name
+        task_name = task if task is not None else "omol"
 
         device = str(device)
         device = "cuda" if device.startswith("cuda") else "cpu"
@@ -47,14 +63,28 @@ class UMACalculator(FAIRChemCalculator):
         if not importlib.util.find_spec("fairchem"):
             raise ImportError("fairchem-core is not installed. Please install it first.")
 
-        predictor = pretrained_mlip.get_predict_unit(
-            model,
-            inference_settings="default",
-            overrides=overrides,
-            device=device,
-        )
-        super().__init__(predict_unit=predictor, task_name="omol")
+        if checkpoint_path is not None:
+            from fairchem.core.units.mlip_unit import load_predict_unit
+            predictor = load_predict_unit(
+                checkpoint_path,
+                inference_settings="default",
+                overrides=overrides,
+                device=device,
+            )
+        else:
+            # Determine model name for pretrained download
+            model_name = size if size else UMA_MODELS_MAP.get(model, "uma-s-1p1")
+            predictor = pretrained_mlip.get_predict_unit(
+                model_name,
+                inference_settings="default",
+                overrides=overrides,
+                device=device,
+            )
+        super().__init__(predict_unit=predictor, task_name=task_name)
+
+        # Store device for internal use
         self.device = torch.device(device)
+        self._predictor_unit = predictor  # keep reference for a2g rebuild
         
         if implicit == "gbsa" and solvent != 'none':
 
@@ -161,16 +191,41 @@ class UMACalculator(FAIRChemCalculator):
     
     def calculate(self, atoms, properties=None, system_changes=None):
         """
-        Override base calculate() to convert energy and forces into Hartree.
+        Override base calculate() to fix spin/charge keys and convert energy to Hartree.
 
-        Args:
-            atoms (ase.Atoms): Atomic structure.
-            properties (list, optional): Properties to calculate.
-            system_changes (list, optional): System changes to consider.
+        Automatically selects task_name based on periodicity:
+            - PBC system (any(atoms.pbc)) → 'omat' (Open Materials)
+            - Non-periodic system          → 'omol' (Open Molecules)
 
-        Returns:
-            dict: Calculation results with energy and forces converted to Hartree.
+        Forces are returned in Ha/Å by FAIRChem (eV/Å * EV2HARTREE already applied
+        via this override). The MD integrator expects Ha/Å and converts to Ha/Bohr itself.
         """
+        # Auto-select task based on PBC
+        task = "omat" if any(atoms.pbc) else "omol"
+        if task != self.task_name:
+            self._task = UMATask(task)
+            # Rebuild a2g converter with correct task_name
+            if self._predictor_unit.inference_settings.external_graph_gen:
+                r_edges, max_neigh = True, 300
+            else:
+                r_edges, max_neigh = False, None
+            self.a2g = partial(
+                AtomicData.from_ase,
+                task_name=task,
+                r_edges=r_edges,
+                r_data_keys=["spin", "charge"],
+                max_neigh=max_neigh,
+                radius=6.0,
+            )
+
+        # Map MAPLE mult → FAIRChem spin (multiplicity, integer)
+        mult = atoms.info.get("mult", 1)
+        atoms.info["spin"] = int(mult)
+
+        # Ensure charge is an integer
+        charge = atoms.info.get("charge", 0)
+        atoms.info["charge"] = int(charge)
+
         super().calculate(atoms, properties, system_changes)
 
         if "energy" in self.results:

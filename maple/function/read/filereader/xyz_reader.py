@@ -105,34 +105,34 @@ class XYZReader:
         * Extra columns after z are allowed and ignored.
 
     Input format:
-      - Simple: '/path/to/file.xyz'
+      - Simple: '/path/to/file.xyz' or 'ag.xyz' or './ag.xyz'
       - With charge/mult: 'XYZ -14 2 /path/to/file.xyz' or '/path/to/file.xyz -14 2'
-      
+
     The charge and multiplicity will be stored in atoms.info['charge'] and atoms.info['mult']
     for UMA to use.
 
-    Behavior:
-      - The file path must be absolute. If not found, the reader tries case-insensitive lookup in the same directory.
-      - Returns an ASE Atoms with float64 positions.
-      - Raises ValueError only when no valid coordinate lines can be parsed.
-
-    Args:
-        file_path (str): Path to XYZ file, optionally with charge and multiplicity.
+    Path resolution:
+      - Absolute paths are used directly.
+      - Relative paths are resolved relative to base_dir (defaults to current working directory).
 
     Returns:
         Atoms: ASE Atoms object parsed from the file, with charge/mult in .info dict.
     """
 
-    def __new__(cls, file_path: str, charge: Optional[int] = None, mult: Optional[int] = None) -> Atoms:
+    def __new__(cls, file_path: str, charge: Optional[int] = None, mult: Optional[int] = None, base_dir: Optional[str] = None) -> Atoms:
         # Parse input string if charge and mult not explicitly provided
         if charge is None and mult is None:
             parsed_path, parsed_charge, parsed_mult = _parse_charge_mult(file_path)
             file_path = parsed_path
             charge = parsed_charge
             mult = parsed_mult
-        
+
+        # Resolve path: absolute paths used directly, relative paths resolved against base_dir
         if not os.path.isabs(file_path):
-            raise ValueError(f"XYZ file path must be absolute: {file_path}")
+            if base_dir is not None:
+                file_path = os.path.join(base_dir, file_path)
+            else:
+                file_path = os.path.abspath(file_path)
 
         # Try exact path; if missing, attempt case-insensitive lookup
         resolved = _case_insensitive_lookup(file_path)
@@ -199,13 +199,52 @@ class XYZReader:
             coords.append([x, y, z])
 
         atoms = Atoms(symbols=elements, positions=np.array(coords, dtype=np.float64))
-        
+
+        # Parse extXYZ comment line for Lattice and PBC info
+        # The comment line was at index (natoms_line_idx + 1); we need to re-find it.
+        # Re-scan: after the natoms line, the very next non-empty line is the comment.
+        comment_line = None
+        _scan = 0
+        while _scan < len(lines) and not lines[_scan].strip():
+            _scan += 1
+        # skip natoms line
+        if _scan < len(lines):
+            try:
+                int(lines[_scan].strip())
+                _scan += 1
+            except ValueError:
+                pass
+        # comment line
+        if _scan < len(lines):
+            comment_line = lines[_scan]
+
+        if comment_line:
+            # Try to parse Lattice="a b c d e f g h i"
+            lattice_match = re.search(r'[Ll]attice\s*=\s*"([^"]+)"', comment_line)
+            pbc_match = re.search(r'[Pp][Bb][Cc]\s*=\s*"([^"]+)"', comment_line)
+            if lattice_match:
+                try:
+                    vals = [float(v) for v in lattice_match.group(1).split()]
+                    if len(vals) == 9:
+                        cell = np.array(vals).reshape(3, 3)
+                        atoms.set_cell(cell)
+                        if pbc_match:
+                            pbc_str = pbc_match.group(1).upper().split()
+                            pbc = [s in ('T', 'TRUE', '1') for s in pbc_str]
+                            if len(pbc) == 3:
+                                atoms.set_pbc(pbc)
+                        else:
+                            atoms.set_pbc(True)
+                except (ValueError, IndexError):
+                    pass
+
         # Store charge and multiplicity in atoms.info for UMA
         if charge is not None:
             atoms.info['charge'] = charge
         if mult is not None:
+            if mult < 1:
+                raise ValueError(f"Invalid multiplicity: {mult}. Must be >= 1")
             atoms.info['mult'] = mult
-        if mult is not None:
             atoms.info['spin'] = (mult -1)/2
-        
+
         return atoms

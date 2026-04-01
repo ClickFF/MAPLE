@@ -162,3 +162,9 @@ cython_debug/
 #.idea/
 *.pt
 *.model
+.worktrees/
+
+# MD example outputs (large run data)
+example/md/**/*.out
+example/md/**/*.dat
+example/md/**/*.xyz

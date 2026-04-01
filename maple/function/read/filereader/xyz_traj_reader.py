@@ -98,39 +98,42 @@ def _parse_charge_mult_traj(input_str: str) -> Tuple[Optional[str], Optional[int
 class XYZTrajReader:
     """
     Robust XYZ trajectory file reader with support for charge and multiplicity.
-    
+
     Reads multi-frame XYZ files where each frame has:
       - First line: integer atom count (N)
       - Second line: comment (can contain energy info, ignored)
       - Next N lines: atomic coordinates
-    
+
     Input format:
-      - Simple: '/path/to/trajectory.xyz'
+      - Simple: '/path/to/trajectory.xyz' or 'traj.xyz' or './traj.xyz'
       - With charge/mult: 'XYZTRAJ -14 2 /path/to/trajectory.xyz' or '/path/to/trajectory.xyz -14 2'
-      
-    The charge and multiplicity will be applied to ALL frames and stored in 
+
+    Path resolution:
+      - Absolute paths are used directly.
+      - Relative paths are resolved relative to base_dir (defaults to current working directory).
+
+    The charge and multiplicity will be applied to ALL frames and stored in
     atoms.info['charge'] and atoms.info['mult'] for each frame.
-    
-    Args:
-        file_path (str): Path to XYZ trajectory file, optionally with charge and multiplicity.
-        charge (Optional[int]): Charge to apply to all frames (overrides parsed value).
-        mult (Optional[int]): Multiplicity to apply to all frames (overrides parsed value).
-    
+
     Returns:
         Molecules: Molecules object containing all frames from the trajectory.
     """
-    
-    def __new__(cls, file_path: str, charge: Optional[int] = None, mult: Optional[int] = None) -> Molecules:
+
+    def __new__(cls, file_path: str, charge: Optional[int] = None, mult: Optional[int] = None, base_dir: Optional[str] = None) -> Molecules:
         # Parse input string if charge and mult not explicitly provided
         if charge is None and mult is None:
             parsed_path, parsed_charge, parsed_mult = _parse_charge_mult_traj(file_path)
             file_path = parsed_path
             charge = parsed_charge
             mult = parsed_mult
-        
+
+        # Resolve path: absolute paths used directly, relative paths resolved against base_dir
         if not os.path.isabs(file_path):
-            raise ValueError(f"XYZ trajectory file path must be absolute: {file_path}")
-        
+            if base_dir is not None:
+                file_path = os.path.join(base_dir, file_path)
+            else:
+                file_path = os.path.abspath(file_path)
+
         # Try exact path; if missing, attempt case-insensitive lookup
         resolved = _case_insensitive_lookup(file_path)
         if not os.path.exists(resolved):

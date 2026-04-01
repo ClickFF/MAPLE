@@ -1,148 +1,31 @@
-Preprocessing the settings ...
-Model: ANI-1ccx.
-Job type: freq.
-GPU ID is set. Using GPU to calculate.
 
-                             Coordinates                              
 **********************************************************************
- 1    C                  0.8617                0.7712                -0.1728
- 2    H                  0.6613                1.5337                -0.9376
- 3    O                  0.5524                0.9876                 1.1207
- 4    C                  1.3421               -0.5674                -0.1822
- 5    H                  0.8187               -0.2250                 1.0871
- 6    H                  1.0223               -1.3467                -0.8857
- 7    H                  2.3217               -0.7022                 0.2975
+*                                                                    *
+*                        M   A   P   L   E                           *
+*                                                                    *
+*      MAchine-learning Potential for Landscape Exploration          *
+*                                                                    *
+*                                                                    *
+*      © 2025 University of Pittsburgh. All rights reserved.         *
+*      Licensed under CC BY 4.0 for academic use.                    *
+*                                                                    *
+*      Principal Developer:  Xujian Wang                             *
+*                                                                    *
+**********************************************************************
 
-Loading the Machine Learning Potential Model...
-Loading ANI model (ANI-1ccx) successfully.
-Using GPU for calculation (cuda:0).
 
-Thermochemistry Summary
-============================================================
-Working pressure: 101.325 kPa
-Zero-point vibrational energy:           25.053928 kcal/mol
-Translational enthalpy at 298 K:        1.481212 kcal/mol
-Rotational enthalpy at 298 K:           0.888727 kcal/mol
-Vibrational thermal enthalpy at 298 K:     3.602636 kcal/mol
-Total enthalpy correction at 298 K:     31.026503 kcal/mol
-
-Gibbs free energy correction at 298 K:   -40.651640 kcal/mol
-
-Entropy components (kcal/mol·K):
-  S_trans:   0.037274
-  S_rot:     0.021607
-  S_vib:     0.181528
-  S_total:   0.240410
-============================================================
-
-Vibrational Frequencies (cm⁻¹)
-------------------------------------------------------------
-Imaginary frequencies:   2
-Real frequencies:      19
-------------------------------------------------------------
-  -4023.77i       -0.29i        0.21         0.31         0.76         0.87   
-      1.26       851.43      1259.31      1415.01   
-
-Normal Modes (Cartesian displacements)
-============================================================
-Frequency   1:   -4023.77 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:     0.013274   -0.021737   -0.034204
-Atom   2:     0.003632    0.004311   -0.000878
-Atom   3:     0.006408   -0.044463    0.015942
-Atom   4:    -0.001087    0.018156   -0.033739
-Atom   5:    -0.229167    0.759127    0.528089
-Atom   6:     0.037340   -0.008583   -0.028526
-Atom   7:    -0.058731   -0.006468    0.057866
-
-Frequency   2:      -0.29 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.061883    0.104058   -0.053815
-Atom   2:    -0.038344    0.089000   -0.074993
-Atom   3:    -0.118842    0.122147   -0.070461
-Atom   4:    -0.046247    0.109370   -0.011212
-Atom   5:    -0.103618    0.124616   -0.038984
-Atom   6:    -0.007740    0.093976   -0.011669
-Atom   7:    -0.064922    0.128536    0.032307
-
-Frequency   3:       0.21 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.128580   -0.098749   -0.032730
-Atom   2:    -0.171990   -0.113747   -0.036310
-Atom   3:    -0.132790   -0.106796   -0.032391
-Atom   4:    -0.059628   -0.074041   -0.027137
-Atom   5:    -0.070459   -0.093275   -0.026416
-Atom   6:    -0.023234   -0.094826   -0.020661
-Atom   7:    -0.050104   -0.020618   -0.031574
-
-Frequency   4:       0.31 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.033582    0.032077   -0.065696
-Atom   2:    -0.067819    0.080000   -0.008951
-Atom   3:     0.107450   -0.013200   -0.024397
-Atom   4:    -0.108408    0.006013   -0.178162
-Atom   5:     0.037155   -0.026275   -0.109423
-Atom   6:    -0.221624    0.057577   -0.183802
-Atom   7:    -0.067976   -0.071177   -0.282412
-
-Frequency   5:       0.76 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.036926    0.012960    0.090725
-Atom   2:     0.033652    0.033187    0.092401
-Atom   3:     0.008224    0.049559    0.095398
-Atom   4:    -0.183315   -0.039545    0.085643
-Atom   5:    -0.124813    0.020396    0.093604
-Atom   6:    -0.280144   -0.006127    0.092654
-Atom   7:    -0.190064   -0.145513    0.069649
-
-Frequency   6:       0.87 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:     0.103632   -0.057854   -0.087715
-Atom   2:     0.260017   -0.082377   -0.153131
-Atom   3:     0.013779    0.058792   -0.128716
-Atom   4:    -0.050768   -0.114159    0.038567
-Atom   5:    -0.123864    0.025809   -0.029328
-Atom   6:    -0.078630   -0.120989    0.058803
-Atom   7:    -0.109030   -0.197802    0.134031
-
-Frequency   7:       1.26 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:     0.127667    0.068493    0.044655
-Atom   2:     0.358872    0.204989    0.120163
-Atom   3:    -0.091621   -0.088443    0.018473
-Atom   4:    -0.023228    0.015097   -0.063641
-Atom   5:    -0.223580   -0.113812   -0.111500
-Atom   6:     0.020569    0.156113   -0.239773
-Atom   7:    -0.129078   -0.167907    0.101078
-
-Frequency   8:     851.43 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.036039   -0.043828    0.009432
-Atom   2:    -0.207042   -0.161008   -0.054391
-Atom   3:     0.048818    0.040321    0.015868
-Atom   4:    -0.011725    0.001087   -0.020853
-Atom   5:    -0.217850   -0.088227   -0.083338
-Atom   6:     0.472391    0.177733   -0.448173
-Atom   7:    -0.253201   -0.059180    0.470137
-
-Frequency   9:    1259.31 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:     0.036278   -0.066883    0.075535
-Atom   2:    -0.016776   -0.160324   -0.024075
-Atom   3:    -0.065008    0.104033    0.023325
-Atom   4:     0.022536   -0.064882   -0.048217
-Atom   5:     0.097763    0.064392    0.150289
-Atom   6:     0.036013    0.194938   -0.358578
-Atom   7:     0.214013   -0.180139   -0.463361
-
-Frequency  10:    1415.01 cm⁻¹
-Eigenvectors       X          Y          Z
-Atom   1:    -0.092352   -0.044760   -0.016336
-Atom   2:     0.640054    0.306410    0.128586
-Atom   3:     0.026979    0.013040    0.001965
-Atom   4:    -0.034224   -0.023727    0.023927
-Atom   5:    -0.019043   -0.017197    0.042840
-Atom   6:     0.342930   -0.032081   -0.140459
-Atom   7:     0.116090    0.351961   -0.152600
-
-Frequency analysis completedOutput file: /home/user/software/maple/example/freq/mw/inp1.out
+Parsing # commands...
+Global parameter: model = ANI-1xnr
+Task set to 'freq'
+Global parameter: device = gpu0
+Parsed configuration:
+----------------------------------------
+Task: freq
+model          : ani1xnr
+method         : mw
+temperature    : 298.15
+pressure_kpa   : 101.325
+ilowfreq       : 2
+verbosity      : 1
+treat_imag_as_real: False
+device         : gpu0

@@ -1,0 +1,10 @@
+#model=aimnet2nse
+#ts(method=autoneb)
+#device=gpu0
+
+XYZ 0 1 /home/user/software/MAPLE/example/ts/autoneb/gauopt_opt.xyz
+
+XYZ 0 1 /home/user/software/MAPLE/example/ts/autoneb/gauopt2_opt.xyz
+
+
+

@@ -1,0 +1,10 @@
+#model=aimnet2nse
+#ts(method=afir)
+#device=gpu0
+
+XYZ -1 1 /home/user/software/MAPLE/example/ts/afir/rec.xyz
+
+XYZ -1 1 /home/user/software/MAPLE/example/ts/afir/pr.xyz
+
+
+

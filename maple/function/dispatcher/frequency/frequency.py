@@ -101,10 +101,10 @@ def _update_dataclass_from_dict(dc_obj, d: Dict):
 @dataclass
 class FrequencyParams:
     """User-facing knobs to steer a frequency job. Keep this sane by default."""
-    method: str = "mw"                  
+    method: str = "mw"
     temperature: float = 298.15
     ilowfreq: int = 2
-    verbosity: int = 1
+    verbose: int = 1
     treat_imag_as_real: bool = False
     pressure_kpa: float = 101.325
     device: str = "cpu"
@@ -1293,7 +1293,7 @@ class Frequency:
                 job = NonMWFrequency(**common_kwargs)
             else:  # "mw"
                 job = MWFrequency(**common_kwargs)
-            job.verbosity = int(self.params.verbosity)
+            job.verbosity = int(self.params.verbose)
             job.treat_imag_as_real = bool(self.params.treat_imag_as_real)
             # pass print-layer params if available
             if hasattr(self, "print_params"):
