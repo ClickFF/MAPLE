@@ -41,6 +41,7 @@ MODEL_NAME_TO_FILE = {
     "maceomol": "maceomol.pt",
     "egret": "egret1s.pt",
     "uma-s-1p1": "uma-s-1p1.pt",
+    "uma-s-1p2": "uma-s-1p2.pt",
     "uma-m-1p1": "uma-m-1p1.pt",
     "macepols": "macepols.pt",
     "macepolm": "macepolm.pt",
@@ -226,8 +227,10 @@ class SetClaculator:
             uma_task = self.model_options.get("task")
             uma_size = self.model_options.get("size")
             checkpoint_path = None
-            if uma_size in {"uma-s-1p1", "uma-m-1p1"}:
-                checkpoint = self._ensure_model_file(uma_size)
+            # Default to uma-s-1p1 when no size specified, so local model file is found
+            effective_size = uma_size if uma_size else "uma-s-1p1"
+            if effective_size in {"uma-s-1p1", "uma-s-1p2", "uma-m-1p1"}:
+                checkpoint = self._ensure_model_file(effective_size)
                 checkpoint_path = str(checkpoint) if checkpoint is not None else None
 
             calculator = UMACalculator(
