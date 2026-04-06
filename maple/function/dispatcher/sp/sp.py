@@ -37,9 +37,8 @@ class SinglePoint(JobABC):
     def _run_single(self):
         """Original single-point calculation logic."""
         with timer("Single Point Energy Calculation"):
-            energy_ev = self.atoms.get_potential_energy()
-            energy_hartree = energy_ev * self.eV2Hartree
-            self.log_info([f"\nEnergy: {energy_hartree:.10f} Hartree\n"])
+            energy = self.atoms.get_potential_energy()
+            self.log_info([f"\nEnergy: {energy:.10f} Hartree\n"])
 
     def _run_trajectory(self):
         """Process multiple structures sequentially."""
@@ -52,8 +51,7 @@ class SinglePoint(JobABC):
 
             for idx, atoms_frame in enumerate(self.atoms, start=1):
                 # Calculate energy
-                energy_ev = atoms_frame.get_potential_energy()
-                energy_hartree = energy_ev * self.eV2Hartree
+                energy_hartree = atoms_frame.get_potential_energy()
                 energies_hartree.append(energy_hartree)
 
                 # Output based on verbose level
