@@ -25,6 +25,7 @@ class CommandControl:
         "macepols",
         "macepolm",
         "macepoll",
+        "macepolefs",
     }
 
     SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc", "md"}

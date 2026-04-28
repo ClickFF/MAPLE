@@ -28,6 +28,7 @@ IMPLEMENTATION_MODELS = [
     "macepols",
     "macepolm",
     "macepoll",
+    "macepolefs",
 ]
 
 MODEL_NAME_TO_FILE = {
@@ -46,6 +47,7 @@ MODEL_NAME_TO_FILE = {
     "macepols": "macepols.pt",
     "macepolm": "macepolm.pt",
     "macepoll": "macepoll.pt",
+    "macepolefs": "macepol-ef-s.pt",
 }
 
 HF_REPO_ID = "Wayne7815/MAPLE_model"
@@ -66,6 +68,7 @@ MODEL_HESSIAN_SUPPORT = {
     "macepols": ("analytic", "numerical"),
     "macepolm": ("analytic", "numerical"),
     "macepoll": ("analytic", "numerical"),
+    "macepolefs": ("analytic", "numerical"),
 }
 
 UNSUPPORTED_CHARGE_MULT_MODELS = {
@@ -187,7 +190,7 @@ class SetClaculator:
                     f"\n [WARNING] Model '{self.model}' does not support charge/multiplicity.\n",
                     f"           charge={self.atoms.info.get('charge', 0)}, ",
                     f"mult={self.atoms.info.get('mult', 1)} will be IGNORED.\n",
-                    "           Models with charge/mult support: aimnet2, aimnet2nse, uma, macepols/m/l\n",
+                    "           Models with charge/mult support: aimnet2, aimnet2nse, uma, macepols/m/l/efs\n",
                 ]
             )
 
@@ -256,7 +259,7 @@ class SetClaculator:
                 implicit=self.implicit,
                 solvent=self.solvent,
             )
-        elif model in {"macepols", "macepolm", "macepoll"}:
+        elif model in {"macepols", "macepolm", "macepoll", "macepolefs"}:
             from .mace._macepol_calculator import MACEPolCalculator
 
             model_path = self.model_options.get("model_path")
@@ -264,12 +267,15 @@ class SetClaculator:
                 downloaded = self._ensure_model_file(model)
                 model_path = str(downloaded) if downloaded is not None else None
 
+            external_field = self.model_options.get("external_field")
+
             calculator = MACEPolCalculator(
                 model=model,
                 device=self.device,
                 model_path=model_path,
                 implicit=self.implicit,
                 solvent=self.solvent,
+                external_field=external_field,
             )
         else:
             raise ValueError(f"Model '{model}' is not implemented yet.")

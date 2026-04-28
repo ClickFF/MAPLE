@@ -296,6 +296,11 @@ class InputReader():
                 model_options.update({k: v for k, v in model_val.items() if k != "name"})
             else:
                 self.model = model_val.lower() if model_val else None
+            # Port top-level #external_field directive into model_options
+            # so MACEPolCalculator(external_field=...) constructor receives it.
+            if "external_field" in params:
+                model_options["external_field"] = params["external_field"]
+
             self.model_options = model_options
             self.model_params = model_options
 

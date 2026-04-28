@@ -22,6 +22,7 @@ _MACEPOL_MODEL_FILES = {
     'macepols': 'macepols.pt',
     'macepolm': 'macepolm.pt',
     'macepoll': 'macepoll.pt',
+    'macepolefs': 'macepol-ef-s.pt',  # field-response fine-tuned (S size)
 }
 
 
@@ -71,6 +72,7 @@ class MACEPolCalculator(CalcABC):
         model_path: str = None,
         implicit: Literal["gbsa", "none"] = "gbsa",
         solvent: str = 'none',
+        external_field=None,
         ):
         """
         Args:
@@ -81,6 +83,10 @@ class MACEPolCalculator(CalcABC):
             solvent: Solvent type.
         """
         super().__init__()
+
+        # External uniform field default (V/A); per-atoms override via atoms.info["external_field"].
+        # Accepts None | "Ex,Ey,Ez" str | (Ex,Ey,Ez) tuple/list | (3,) or (N,3) np.ndarray.
+        self.external_field_default = self._parse_external_field(external_field)
 
         if model_path is None:
             model_dir = os.path.dirname(os.path.realpath(__file__))
@@ -101,6 +107,21 @@ class MACEPolCalculator(CalcABC):
         self.hessian = "analytic"
 
         self.implicit_solv_init(implicit=implicit, solvent=solvent)
+
+    @staticmethod
+    def _parse_external_field(ef):
+        """Normalize user-supplied external_field to (3,) or (N,3) np.float32 array, or None."""
+        if ef is None:
+            return None
+        if isinstance(ef, str):
+            parts = [float(x) for x in ef.replace("(", "").replace(")", "").split(",")]
+            if len(parts) != 3:
+                raise ValueError(f"external_field string must have 3 comma-sep values; got: {ef}")
+            return np.asarray(parts, dtype=np.float32)
+        arr = np.asarray(ef, dtype=np.float32)
+        if arr.shape == (3,) or (arr.ndim == 2 and arr.shape[1] == 3):
+            return arr
+        raise ValueError(f"external_field must be (3,) or (N,3); got shape {arr.shape}")
 
     def _build_inputs(self, atoms, requires_grad=False):
         """Build the 12 flat tensor inputs for MACE-POLAR forward pass."""
@@ -128,20 +149,21 @@ class MACEPolCalculator(CalcABC):
         total_charge = torch.tensor([charge], dtype=dtype, device=device)
         total_spin = torch.tensor([spin], dtype=dtype, device=device)
 
-        # External uniform field from atoms.info["external_field"] (V/A, native model unit).
-        # Accepted forms: (3,) tuple/list/array (broadcast to all atoms),
-        # or (N,3) per-atom array. None or absent => zero field (vacuum SP).
-        ext_field_in = atoms.info.get("external_field", None)
-        if ext_field_in is None:
+        # External field resolution (V/A, native model unit):
+        # 1) atoms.info["external_field"] (per-atoms override)
+        # 2) self.external_field_default (constructor default)
+        # 3) zeros (vacuum SP)
+        ef = atoms.info.get("external_field", None)
+        if ef is None:
+            ef = self.external_field_default
+        if ef is None:
             external_field = torch.zeros(N, 3, dtype=dtype, device=device)
         else:
-            ef = np.asarray(ext_field_in, dtype=np.float32)
+            ef = np.asarray(ef, dtype=np.float32)
             if ef.shape == (3,):
                 ef = np.broadcast_to(ef, (N, 3)).copy()
             elif ef.shape != (N, 3):
-                raise ValueError(
-                    f"atoms.info[\"external_field\"] must have shape (3,) or ({N},3); got {ef.shape}"
-                )
+                raise ValueError(f"external_field must be (3,) or ({N},3); got shape {ef.shape}")
             external_field = torch.from_numpy(ef).to(device=device, dtype=dtype)
         local_or_ghost = torch.ones(N, dtype=dtype, device=device)
 
