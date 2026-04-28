@@ -72,9 +72,14 @@ CLI path matched the direct-Python smoke test
   embedded inside a directive that already uses commas, the parser may
   mis-split. Fine for the current top-level placement but worth a design
   pass before broader use.
-- **GPU architecture coupling for `macepol-ef-s`** — the user-distributed
-  `macepol-ef-s.pt` was traced/saved against a PyTorch wheel without
-  multi-arch fat binaries; loads on sm_80 (A100) but raises
-  `cudaErrorNoKernelImageForDevice` on sm_70 (V100) / sm_61 (1080 Ti). This
-  is an environment/wheel issue, not a calculator issue, and is not addressed
-  in this PR.
+- **Requires sm_75 or newer GPU (A100 / H100 / RTX 30xx+ / etc.)** — every
+  `macepol-{s,l,ef-s}` model (not just `ef-s`) requires PyTorch >= 2.5, and
+  the upstream PyTorch 2.5+ wheel was built without sm_70 (V100) / sm_61
+  (1080 Ti) support. Submitting to V100 nodes raises
+  `cudaErrorNoKernelImageForDevice` at `torch.jit.load`. This is an upstream
+  PyTorch deprecation, not a MAPLE / MACE-POLAR issue. Diagnostic verified
+  on Ibex 2026-04-28 with `torch.cuda.get_arch_list()` returning
+  `['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120']` from a real
+  GPU node srun (NOT a login node — login-node `arch_list` is `[]` because
+  CUDA isn't initialised, and that misled an earlier diagnosis). Workaround:
+  request `--gres=gpu:a100:1` (or h100/h200) for production runs.
