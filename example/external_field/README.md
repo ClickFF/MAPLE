@@ -72,14 +72,22 @@ CLI path matched the direct-Python smoke test
   embedded inside a directive that already uses commas, the parser may
   mis-split. Fine for the current top-level placement but worth a design
   pass before broader use.
-- **Requires sm_75 or newer GPU (A100 / H100 / RTX 30xx+ / etc.)** — every
-  `macepol-{s,l,ef-s}` model (not just `ef-s`) requires PyTorch >= 2.5, and
-  the upstream PyTorch 2.5+ wheel was built without sm_70 (V100) / sm_61
-  (1080 Ti) support. Submitting to V100 nodes raises
-  `cudaErrorNoKernelImageForDevice` at `torch.jit.load`. This is an upstream
-  PyTorch deprecation, not a MAPLE / MACE-POLAR issue. Diagnostic verified
-  on Ibex 2026-04-28 with `torch.cuda.get_arch_list()` returning
-  `['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120']` from a real
-  GPU node srun (NOT a login node — login-node `arch_list` is `[]` because
-  CUDA isn't initialised, and that misled an earlier diagnosis). Workaround:
-  request `--gres=gpu:a100:1` (or h100/h200) for production runs.
+- **GPU compatibility — pick the right PyTorch wheel** —
+  `macepol-{s,l,ef-s}` are jit-traced under PyTorch 2.5+. The cuXXX channel
+  determines which compute capabilities are baked into the wheel:
+
+  | wheel | arch_list (verified on GPU srun) | works on |
+  |---|---|---|
+  | `torch 2.5.1+cu121` | `sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_90` | V100, 1080 Ti, A100, H100, RTX 20/30/40xx |
+  | `torch 2.11+cu128` | `sm_75, sm_80, sm_86, sm_90, sm_100, sm_120` | A100/H100/H200, RTX 30/40xx; **NOT** V100/1080 Ti |
+
+  The `cu121` channel still ships sm_60/sm_70 kernels, so for multi-GPU access
+  install MAPLE under a torch 2.5.1+cu121 environment. cu128 wheels dropped
+  sm_70 upstream — using cu128 on a V100 raises `cudaErrorNoKernelImageForDevice`
+  at `torch.jit.load`. Verified on Ibex 2026-04-28 (jobs 46781888 V100 +
+  46781889 1080 Ti): all three models pass identical-to-six-figures forward
+  passes against an A100 reference under torch 2.5.1+cu121.
+
+  Diagnostic: `torch.cuda.get_arch_list()` must be queried from a real GPU
+  srun, **not** a login node — on a login node it returns `[]` because CUDA
+  isn't initialised, which can mislead diagnosis.
