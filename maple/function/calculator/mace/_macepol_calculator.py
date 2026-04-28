@@ -128,8 +128,21 @@ class MACEPolCalculator(CalcABC):
         total_charge = torch.tensor([charge], dtype=dtype, device=device)
         total_spin = torch.tensor([spin], dtype=dtype, device=device)
 
-        # No external field for pure MLIP
-        external_field = torch.zeros(N, 3, dtype=dtype, device=device)
+        # External uniform field from atoms.info["external_field"] (V/A, native model unit).
+        # Accepted forms: (3,) tuple/list/array (broadcast to all atoms),
+        # or (N,3) per-atom array. None or absent => zero field (vacuum SP).
+        ext_field_in = atoms.info.get("external_field", None)
+        if ext_field_in is None:
+            external_field = torch.zeros(N, 3, dtype=dtype, device=device)
+        else:
+            ef = np.asarray(ext_field_in, dtype=np.float32)
+            if ef.shape == (3,):
+                ef = np.broadcast_to(ef, (N, 3)).copy()
+            elif ef.shape != (N, 3):
+                raise ValueError(
+                    f"atoms.info[\"external_field\"] must have shape (3,) or ({N},3); got {ef.shape}"
+                )
+            external_field = torch.from_numpy(ef).to(device=device, dtype=dtype)
         local_or_ghost = torch.ones(N, dtype=dtype, device=device)
 
         return (positions, node_attrs, edge_index, shifts, unit_shifts,
