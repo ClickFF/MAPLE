@@ -93,6 +93,13 @@ class Dispatcher():
             ts = TransitionState(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
             ts.run()
         
+        elif jobtype == 'phonon':
+            from .phonon import Phonon
+            if isinstance(atoms, (list, Molecules)):
+                raise NotImplementedError('For phonon job, only one Atoms object is allowed.')
+            phonon = Phonon(output=output, atoms=atoms, paras=commandcontrol.params)
+            phonon.run()
+
         elif jobtype == 'irc':
             from .irc import IRC
 

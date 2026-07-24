@@ -1,0 +1,9 @@
+#model=chgnet(module=chgnet_maple_plugin)
+#phonon
+#device=cpu
+#pbc(3.8397,3.8397,3.8397,60,60,60)
+#supercell=4,4,4
+
+0 1
+Si  0.0000  0.0000  0.0000
+Si  1.9199  1.1083  0.7838
