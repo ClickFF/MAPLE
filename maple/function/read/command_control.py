@@ -10,7 +10,7 @@ class CommandControl:
     All other settings are global parameters.
     """
 
-    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc", "md"}
+    SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc", "md", "phonon"}
 
     SUPPORTED_UMA_TASKS = {"omol", "omat", "oc20", "odac", "omc", "oc22", "oc25"}
     SUPPORTED_UMA_SIZES = {"uma-s-1p1", "uma-s-1p2", "uma-m-1p1"}
@@ -24,6 +24,16 @@ class CommandControl:
         "d4": False,
         "sp": {},
         "opt": {},
+        "phonon": {
+            "supercell": "3,3,3",
+            "displacement": 0.01,
+            "npoints": 20,
+            "kpath": None,
+            "fmax": 0.05,
+            "relax": True,
+            "units": "THz",
+            "device": "cpu",
+        },
         "ts": {},
         "irc": {"method": "gs"},
         "scan": {},
