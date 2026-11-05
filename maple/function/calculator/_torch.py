@@ -1,6 +1,8 @@
 """TorchScript loading, derivatives and public property shapes."""
+
 import numpy as np
 import torch
+
 from .calculator_base import _convert_properties
 
 
@@ -31,6 +33,7 @@ def _numpy(tensor):
     # round a native FP32 energy a second time in Hartree.
     return tensor.detach().cpu().numpy().astype(np.float64, copy=True)
 
+
 def _grad(value, variables, *, create_graph=False, retain_graph=False):
     """Constant-energy and locally linear-energy derivatives are exactly zero."""
     if not value.requires_grad:
@@ -59,6 +62,7 @@ def _native_atomic(tensor, positions, members, *, vector=False, as_tensor=False)
         return None
     return tensor if as_tensor else _atomic_values(tensor, members, dense=positions.dim() == 3)
 
+
 def _native_system(tensor, members, shape):
     if not isinstance(tensor, torch.Tensor):
         return None
@@ -70,6 +74,7 @@ def _native_system(tensor, members, shape):
         return None
     return _numpy(tensor)
 
+
 def _atomic_values(tensor, members, *, dense):
     array = _numpy(tensor)
     if dense:
@@ -80,6 +85,7 @@ def _atomic_values(tensor, members, *, dense):
         start += len(atoms)
     return values
 
+
 def _coordinate_indices(positions, members):
     start = 0
     for i, atoms in enumerate(members):
@@ -88,6 +94,7 @@ def _coordinate_indices(positions, members):
         yield torch.arange(start, start + len(atoms) * 3, device=positions.device)
         if positions.dim() == 2:
             start += len(atoms) * 3
+
 
 def _pack_vector(vector, positions, members, single):
     vectors = [vector] if single else list(vector)
@@ -107,6 +114,7 @@ def _pack_vector(vector, positions, members, single):
             result[start:start + len(atoms)] = value
             start += len(atoms)
     return result
+
 
 def derivative_order(properties):
     if set(properties) & {"hessian", "hvp"}:
@@ -234,3 +242,19 @@ def tensor_properties(energy, positions, members, properties, *, outputs=None,
         results["hvp"] = (products[0], forces[0], energy[0].detach().clone()) if single else (
             products, forces, energy.detach().clone())
     return _convert_properties(results, source_unit=source_unit)
+
+
+def calculate_single(calc, atoms, properties, system_changes):
+    """One ASE request using this backend's existing property evaluator."""
+    from .calculator_base import CalcABC
+    properties = calc._normalize_properties(properties)
+    atoms = CalcABC.calculate(calc, atoms, properties, system_changes)
+    requested = ['energy' if name == 'free_energy' else name for name in properties]
+    requested = list(dict.fromkeys(['energy', *requested]))
+    numerical = 'hessian' in requested and calc.hessian == 'numerical'
+    if numerical:
+        requested.remove('hessian')
+    result = calc._calculate([atoms], requested)
+    if numerical:
+        result['hessian'] = [calc.get_hessian(atoms)]
+    calc._store_properties(atoms, result)

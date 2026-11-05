@@ -6,42 +6,58 @@ import jax.numpy as jnp
 import numpy as np
 from ase.neighborlist import neighbor_list
 
+from . import _model
 from .. import _inputs, _jax
 from ..calculator_base import CalcABC, _convert_properties, register_calculator
-from . import _model
 
 
 @register_calculator
 class SO3LRCalculator(CalcABC):
     """SO3LR standard JAX export plus its native complete long-range energy."""
 
-    MODEL_NAMES = ('so3lr',)
+    MODEL_NAMES = ('so3lr', 'so3lr-tauri-s', 'so3lr-tauri-m', 'so3lr-tauri-l')
     implemented_properties = ['energy', 'free_energy', 'forces', 'hessian', 'charges', 'dipole', 'stress', 'virial']
     MODEL_ENERGY_UNIT = 'eV'
     SUPPORTED_HESSIAN_MODES = ('analytic', 'numerical')
     SUPPORTS_CHARGE_MULT = True
     SUPPORTS_PBC = True
-    LOCAL_MODEL_FILENAMES = {'so3lr': 'so3lr.jax'}
+    LOCAL_MODEL_FILENAMES = {name: name + '.jax' for name in MODEL_NAMES}
     OPTION_KEYS = ('dtype', 'lr')
-    MODEL_PATH_OPTION = 'model_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, model_options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': model_options.get('dtype'),
+        return {'dtype': model_options.get('dtype'),
                 'lr': model_options.get('lr', 'auto')}
 
-    def __init__(self, device=None, model='so3lr', model_path=None,
+    def __init__(self, device=None, model='so3lr',
                  implicit='none', solvent='none', dtype=None, lr='auto'):
         super().__init__()
         if model not in self.MODEL_NAMES:
             raise ValueError(f'Unknown SO3LR model: {model!r}')
         self.device = str(device or 'cpu')
-        self.model_path = str(model_path or Path(__file__).resolve().parents[1] / 'model' / 'so3lr.jax')
+        self.model_path = str(Path(__file__).resolve().parents[1] / 'model' / self.LOCAL_MODEL_FILENAMES[model])
         self.model, self.jax_device = _jax.load_model(self.model_path, self.device, require_vjp=2)
+
         template = self.model.in_tree.unflatten(self.model.in_avals)[0][0]
         self.dtype = template['positions'].dtype
+        self.metadata = _jax.read_metadata(self.model, family='so3lr', model_id=model)
+        self.cutoff = float(self.metadata['cutoff'])
+        self.head_index = self.metadata['selected_head_index']
+        self.num_theory_heads = self.metadata['num_theory_heads']
+        self.atomic_numbers = np.asarray(self.metadata['atomic_numbers'])
+        if self.metadata['dtype'] != str(self.dtype):
+            raise ValueError('SO3LR metadata dtype conflicts with its input signature')
+        if isinstance(self.metadata['cutoff'], bool) or not np.isfinite(self.cutoff) or self.cutoff <= 0:
+            raise ValueError('SO3LR cutoff must be finite and positive')
+        if (type(self.head_index) is not int or type(self.num_theory_heads) is not int
+                or not 0 <= self.head_index < self.num_theory_heads
+                or self.num_theory_heads != template['theory_mask'].shape[1]):
+            raise ValueError('SO3LR head selection conflicts with theory_mask')
+        if self.metadata.get('spin_convention') != 'multiplicity_minus_one':
+            raise ValueError('Unsupported SO3LR spin convention')
         if dtype is not None and np.dtype(dtype) != self.dtype:
             raise ValueError(f'Export supports dtype={self.dtype}, requested {dtype}')
+
         self.lr = str(lr).lower()
         self._validate_lr()
         self._capacity = {}
@@ -74,15 +90,15 @@ class SO3LRCalculator(CalcABC):
         offset = 0
         for b, atoms in enumerate(atoms_list):
             charge, mult = _inputs._state(atoms)
-            if np.any((atoms.numbers < 1) | (atoms.numbers > 99)):
-                raise ValueError('SO3LR element encoding supports atomic numbers 1..99')
+            if not np.isin(atoms.numbers, self.atomic_numbers).all():
+                raise ValueError(f'SO3LR model supports atomic numbers 1..{self.atomic_numbers[-1]}')
             charges.append(charge)
             unpaired.append(mult - 1.)
             arrays['positions'].extend(atoms.positions)
             arrays['atomic_numbers'].extend(atoms.numbers)
             arrays['batch_segments'].extend([b] * len(atoms))
             arrays['cell'].append(atoms.cell.array if atoms.cell.rank else np.eye(3))
-            for radius, suffix in ((4.5, ''), (cutoff, '_lr')):
+            for radius, suffix in ((self.cutoff, ''), (cutoff, '_lr')):
                 i, j, shifts = neighbor_list('ijS', atoms, radius, self_interaction=False)
                 arrays['idx_i' + suffix].extend(i + offset)
                 arrays['idx_j' + suffix].extend(j + offset)
@@ -110,7 +126,7 @@ class SO3LRCalculator(CalcABC):
             node_mask=np.arange(max_atoms) < offset, graph_mask=np.arange(graphs + 1) < graphs,
             total_charge=np.asarray(charges + [0.], self.dtype),
             num_unpaired_electrons=np.asarray(unpaired + [0.], self.dtype),
-            theory_mask=np.tile(np.arange(16) == 0, (graphs + 1, 1)),
+            theory_mask=np.tile(np.arange(self.num_theory_heads) == self.head_index, (graphs + 1, 1)),
             lr_cutoff=np.asarray(cutoff, self.dtype), use_kspace=np.asarray(False),
             pbc=atoms_list[0].pbc.copy(),
         )
@@ -125,9 +141,11 @@ class SO3LRCalculator(CalcABC):
         key = method, shape, 12. if periodic else 1000., fields
         if key not in self._compiled:
             complete = partial(_model.forward, self.model, method=method, shape=shape, cutoff=key[2])
+
             def forward(data):
                 output = complete(data)
                 return {name: output[name] for name in ('energy', *fields)}
+
             forces = _jax.compile_forces(forward, position_key='positions', energy_key='energy')
             self._compiled[key] = {
                 'energy': jax.jit(lambda data: forward(data)['energy']),
@@ -140,6 +158,9 @@ class SO3LRCalculator(CalcABC):
                                                      energy_key='energy', batch_key='batch_segments'),
             }
         return self._compiled[key]
+
+    def calculate(self, atoms=None, properties=None, system_changes=None):
+        return _jax.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties):
         needs_hessian = 'hessian' in properties
@@ -171,17 +192,6 @@ class SO3LRCalculator(CalcABC):
         if needs_hessian:
             result['hessian'] = [self.get_hessian(atoms) for atoms in atoms_list]
         return result
-
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        properties = self._normalize_properties(properties)
-        if system_changes is None:
-            atoms = super().calculate(atoms, properties)
-        else:
-            atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        result = self._calculate([atoms], requested)
-        self._store_properties(atoms, result)
 
     def _batch_key(self, atoms):
         periodic = bool(atoms.pbc.any())

@@ -1,10 +1,12 @@
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
+
 import numpy as np
-from ase.calculators.calculator import all_changes
-from ..calculator_base import CalcABC, register_calculator
-from .. import _inputs, _torch
 import torch
+from ase.calculators.calculator import all_changes
+
+from .. import _inputs, _torch
+from ..calculator_base import CalcABC, register_calculator
 
 
 def build_inputs_from_atoms(atoms, model, device='cpu', positions=None, dtype=None):
@@ -35,21 +37,19 @@ class MACEPolCalculator(CalcABC):
     SUPPORTS_PBC = True
     REQUIRES_LOCAL_MODEL_FILE = True
     OPTION_KEYS = ('dtype',)
-    MODEL_PATH_OPTION = 'model_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': options.get('dtype')}
+        return {'dtype': options.get('dtype')}
 
     def __init__(self, device: torch.device | str = 'cpu',
                  model: str = 'mace-polar-1s',
-                 model_path: Optional[str] = None,
                  implicit: Literal['gbsa', 'none'] = 'none',
                  solvent: str = 'none',
                  dtype=None):
-        """Load model/<model>.pt, or model_path when supplied, at the requested precision."""
+        """Load the registered model at the requested precision."""
         super().__init__()
-        path = model_path or Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
+        path = Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
         native_dtype = _torch.load_model(self, path, device, dtype)
         self.hessian = 'analytic'
         if self.dtype != native_dtype:
@@ -57,18 +57,13 @@ class MACEPolCalculator(CalcABC):
         self.model_name = model
         self.implicit_solv_init(implicit=implicit, solvent=solvent)
 
+    def _build_inputs(self, atoms, requires_grad=False):
+        data = build_inputs_from_atoms(atoms, self.model, device=self.device, dtype=self.dtype)
+        data['positions'].requires_grad_(requires_grad)
+        return data
+
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        properties = self._normalize_properties(properties)
-        atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        numerical = 'hessian' in requested and self.hessian == 'numerical'
-        if numerical:
-            requested.remove('hessian')
-        result = self._calculate([atoms], requested)
-        if numerical:
-            result['hessian'] = [self.get_hessian(atoms)]
-        self._store_properties(atoms, result)
+        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         data = build_inputs_from_atoms(atoms_list, self.model, device=self.device, dtype=self.dtype)
@@ -112,8 +107,3 @@ class MACEPolCalculator(CalcABC):
         if getattr(self, 'solvent_correction', None) is not None:
             return super().get_hvp(atoms, n)
         return self._calculate([atoms], ['hvp'], vector=n)['hvp']
-
-    def _build_inputs(self, atoms, requires_grad=False):
-        data = build_inputs_from_atoms(atoms, self.model, device=self.device, dtype=self.dtype)
-        data['positions'].requires_grad_(requires_grad)
-        return data

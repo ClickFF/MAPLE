@@ -242,8 +242,6 @@ class CalcABC(ase.calculators.calculator.Calculator):
     # None keeps legacy/plugins permissive. Shipped backends set an explicit
     # tuple so input typos fail before a model is loaded.
     OPTION_KEYS: tuple | None = None
-    # Constructor kwarg that accepts an explicit user model_path, if any.
-    MODEL_PATH_OPTION: str | None = None
 
     def __init__(self):
         super().__init__()

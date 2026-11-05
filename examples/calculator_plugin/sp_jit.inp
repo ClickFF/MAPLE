@@ -1,8 +1,0 @@
-#model=mytemplate-jit(module=my_calculator_plugin, model_path=toy_jit.pt)
-#sp
-#device=cpu
-
-0 1
-O   0.000   0.000   0.000
-H   0.960   0.000   0.000
-H  -0.240   0.930   0.000

@@ -1,4 +1,5 @@
 """Frozen TensorFlow graphs, compiled derivatives and public property shapes."""
+
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +67,19 @@ def prepare_strain(coordinates, cells, strain, *, batch=None):
     return positions, cells @ transform
 
 
+def compile_hvp(forward, *, position_key, force_key):
+    @tf.function(jit_compile=True, autograph=False)
+    def product(data, vector):
+        positions = data[position_key]
+        with tf.GradientTape() as tape:
+            tape.watch(positions)
+            output = forward(data)
+            contraction = -tf.reduce_sum(output[force_key] * vector)
+        gradient = tape.gradient(contraction, positions, unconnected_gradients=tf.UnconnectedGradients.ZERO)
+        return tf.convert_to_tensor(gradient), output
+    return product
+
+
 def compile_strain(forward, *, position_key, cell_key, energy_key, batch_key=None):
     @tf.function(jit_compile=True, autograph=False)
     def strained_energy(data, strain):
@@ -80,19 +94,6 @@ def compile_strain(forward, *, position_key, cell_key, energy_key, batch_key=Non
         gradient = tape.gradient(energy, strain, unconnected_gradients=tf.UnconnectedGradients.ZERO)
         return (energy, output), tf.convert_to_tensor(gradient)
     return strained_energy
-
-
-def compile_hvp(forward, *, position_key, force_key):
-    @tf.function(jit_compile=True, autograph=False)
-    def product(data, vector):
-        positions = data[position_key]
-        with tf.GradientTape() as tape:
-            tape.watch(positions)
-            output = forward(data)
-            contraction = -tf.reduce_sum(output[force_key] * vector)
-        gradient = tape.gradient(contraction, positions, unconnected_gradients=tf.UnconnectedGradients.ZERO)
-        return tf.convert_to_tensor(gradient), output
-    return product
 
 
 def hessian(hvp, data, coordinates, atom_count, device='cpu'):

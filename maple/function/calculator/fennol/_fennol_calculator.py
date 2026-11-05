@@ -4,14 +4,15 @@ from pathlib import Path
 
 import numpy as np
 
-from ..calculator_base import CalcABC, _convert_properties, register_calculator
 from .. import _inputs
+from ..calculator_base import CalcABC, _convert_properties, register_calculator
 
 
 _FENNOL_MODEL_FILES = {
     'fennix-bio-1s': 'fennix-bio-1s.jax',
     'fennix-bio-1m': 'fennix-bio-1m.jax',
 }
+
 
 @register_calculator
 class FeNNolCalculator(CalcABC):
@@ -28,7 +29,6 @@ class FeNNolCalculator(CalcABC):
     REQUIRES_LOCAL_MODEL_FILE = False
     LOCAL_MODEL_FILENAMES = _FENNOL_MODEL_FILES
     OPTION_KEYS = ("dtype",)
-    MODEL_PATH_OPTION = "model_path"
 
     @staticmethod
     def model_filename(model: str) -> str:
@@ -40,25 +40,22 @@ class FeNNolCalculator(CalcABC):
 
     @classmethod
     def build_kwargs_from_options(cls, model, model_options, *, resolved_model_path=None):
-        return {"model_path": resolved_model_path, "dtype": model_options.get("dtype")}
+        return {"dtype": model_options.get("dtype")}
 
     def __init__(
         self,
         device=None,
         model: str = "fennix-bio-1s",
-        model_path: str | None = None,
         implicit: str = "none",
         solvent: str = "none",
         dtype=None,
     ):
         super().__init__()
         self.device = device
+        self.model_name = model
         if model not in self.MODEL_NAMES:
             raise ValueError(f"Unknown FENNIX model: {model!r}")
-        if model_path is None:
-            model_dir = Path(__file__).resolve().parents[1] / "model"
-            model_path = str(model_dir / self.model_filename(model))
-        self.model_path = str(model_path)
+        self.model_path = str(Path(__file__).resolve().parents[1] / 'model' / self.model_filename(model))
         if Path(self.model_path).suffix != '.jax':
             raise ValueError('FENNIX builtins require a standard .jax export; .fnx checkpoints are build inputs')
         self._load_export(dtype=dtype)
@@ -77,11 +74,37 @@ class FeNNolCalculator(CalcABC):
         if dtype is not None and str(dtype) != str(self.dtype):
             raise ValueError(f'Export supports dtype={self.dtype}, requested {dtype}')
         self.block_names = tuple(template['block_index'])
-        # BIO1 S/M share these checkpoint preprocessing settings.
-        self.generator = GraphGenerator(cutoff=7.5)
-        self.filter = GraphFilter(cutoff=3.5, parent_graph='graph', graph_key='graph_embed')
-        self.indexer = BlockIndexer(split_CNOPSSe=True)
+
+        self.metadata = _jax.read_metadata(self.model, family='fennix', model_id=self.model_name)
+        if self.metadata['dtype'] != str(self.dtype):
+            raise ValueError('FENNIX metadata dtype conflicts with its input signature')
+
+        config = self.metadata['preprocessing']
+        if not isinstance(config, dict) or set(config) != {'graph', 'graph_embed', 'block_indexer'}:
+            raise ValueError('FENNIX metadata requires its native preprocessing configuration')
+        if not all(isinstance(config[key], dict) for key in config):
+            raise ValueError('Invalid FENNIX preprocessing settings')
+        if (set(config['graph']) != {'cutoff', 'graph_key'}
+                or set(config['graph_embed']) != {'cutoff', 'parent_graph', 'graph_key'}
+                or set(config['block_indexer']) != {'split_CNOPSSe'}):
+            raise ValueError('Unsupported FENNIX preprocessing fields')
+        if (config['graph']['graph_key'] != 'graph'
+                or config['graph_embed']['parent_graph'] != 'graph'
+                or config['graph_embed']['graph_key'] != 'graph_embed'
+                or type(config['block_indexer']['split_CNOPSSe']) is not bool):
+            raise ValueError('Unsupported FENNIX preprocessing layout')
+        for graph in ('graph', 'graph_embed'):
+            cutoff = config[graph]['cutoff']
+            if (isinstance(cutoff, bool) or not isinstance(cutoff, (float, int))
+                    or not np.isfinite(cutoff) or cutoff <= 0):
+                raise ValueError(f'FENNIX {graph} cutoff must be finite and positive')
+
+        self.atomic_numbers = np.asarray(self.metadata['atomic_numbers'])
+        self.generator = GraphGenerator(**config['graph'])
+        self.filter = GraphFilter(**config['graph_embed'])
+        self.indexer = BlockIndexer(**config['block_indexer'])
         self.states = (self.generator.init(), self.filter.init(), self.indexer.init())
+
         self._call = jax.jit(self.model.call)
         self._energy_call = jax.jit(lambda data: self.model.call(data)['total_energy'])
 
@@ -90,6 +113,18 @@ class FeNNolCalculator(CalcABC):
             self.model.call, position_key='coordinates', cell_key='cells',
             energy_key='total_energy', batch_key='batch_index',
         )
+
+    @staticmethod
+    def _validate_multiplicity(atoms) -> None:
+        info = getattr(atoms, 'info', {})
+        mult = info.get('mult', info.get('multiplicity'))
+        if mult is None:
+            return
+        if not np.isfinite(float(mult)) or float(mult) != 1.:
+            raise ValueError(
+                "FENNIX BIO1 accepts total charge but has no spin/multiplicity "
+                "input; use mult=1."
+            )
 
     def _build_inputs(self, atoms_list, total_charge=None):
         import jax
@@ -103,8 +138,7 @@ class FeNNolCalculator(CalcABC):
             self._validate_multiplicity(atoms)
             if atoms.pbc.any() and not atoms.pbc.all():
                 raise ValueError('FENNIX exports require full three-dimensional periodicity')
-            if np.any((atoms.numbers < 1) | (atoms.numbers > 86)):
-                raise ValueError('FENNIX BIO1 element encoding supports atomic numbers 1..86')
+            _inputs._elements(atoms, self.atomic_numbers)
         counts = [len(atoms) for atoms in members]
         nat = sum(counts)
         padding = max(1, len(members) + 2 - nat)
@@ -149,6 +183,10 @@ class FeNNolCalculator(CalcABC):
                     graph['pbc_shifts'] = np.zeros((len(graph['edge_src']), 3), np.int32)
         return jax.device_put(data, self.jax_device)
 
+    def calculate(self, atoms=None, properties=None, system_changes=None):
+        from .. import _jax
+        return _jax.calculate_single(self, atoms, properties, system_changes)
+
     def _calculate(self, atoms_list, properties):
         import jax.numpy as jnp
         from .. import _jax
@@ -179,29 +217,6 @@ class FeNNolCalculator(CalcABC):
             # get_hessian already returns Hartree/Å².
             result['hessian'] = [self.get_hessian(atoms) for atoms in members]
         return result
-
-    @staticmethod
-    def _validate_multiplicity(atoms) -> None:
-        info = getattr(atoms, 'info', {})
-        mult = info.get('mult', info.get('multiplicity'))
-        if mult is None:
-            return
-        if not np.isfinite(float(mult)) or float(mult) != 1.:
-            raise ValueError(
-                "FENNIX BIO1 accepts total charge but has no spin/multiplicity "
-                "input; use mult=1."
-            )
-
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        properties = self._normalize_properties(properties)
-        if system_changes is None:
-            atoms = super().calculate(atoms, properties)
-        else:
-            atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        result = self._calculate([atoms], requested)
-        self._store_properties(atoms, result)
 
     def _batch_key(self, atoms):
         return (bool(atoms.pbc.any()),)

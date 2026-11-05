@@ -1,10 +1,12 @@
 from pathlib import Path
 from typing import Literal, Optional
+
 import numpy as np
-from ase.calculators.calculator import all_changes
-from ..calculator_base import CalcABC, register_calculator
-from .. import _inputs, _torch
 import torch
+from ase.calculators.calculator import all_changes
+
+from .. import _inputs, _torch
+from ..calculator_base import CalcABC, register_calculator
 
 
 def build_data_from_atoms(atoms, model, device='cpu',
@@ -22,7 +24,7 @@ def build_data_from_atoms(atoms, model, device='cpu',
     names = list(getattr(model, 'state_names', ()))
     data = _inputs.prepare_mace(members, _inputs._species(native.atomic_numbers), float(native.r_max),
                         device=device, dtype=dtype,
-                        head_index=int(getattr(model, 'selected_head_index', max(len(getattr(native, 'heads', ['Default'])) - 1, 0))),
+                        head_index=int(model.selected_head_index),
                         state_names=names, state_offsets=list(getattr(model, 'state_offsets', ())),
                         state_classes=list(getattr(model, 'state_classes', ())), unconditioned=not bool(names),
                         full_pbc=full_pbc, min_volume=1e-6 if full_pbc else None)
@@ -35,7 +37,7 @@ def build_data_from_atoms(atoms, model, device='cpu',
 class MACECalculator(CalcABC):
     """ASE calculator for standalone MACE-OFF, MACE-LES and EGRET TorchScript models."""
 
-    implemented_properties = ['energy', 'forces', 'free_energy', 'hessian', 'charges', 'dipole', 'stress', 'virial']
+    implemented_properties = ['energy', 'forces', 'free_energy', 'hessian', 'stress', 'virial']
     MODEL_NAMES = (
         'mace-off-23s', 'mace-off-23m', 'mace-off-23l', 'mace-off-23bm',
         'mace-off-24m', 'mace-les-off', 'egret-1', 'egret-1e', 'egret-1m', 'egret-1s', 'egret-1t',
@@ -46,22 +48,25 @@ class MACECalculator(CalcABC):
     SUPPORTS_PBC = True
     REQUIRES_LOCAL_MODEL_FILE = True
     OPTION_KEYS = ('dtype',)
-    MODEL_PATH_OPTION = 'model_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': options.get('dtype')}
+        return {'dtype': options.get('dtype')}
 
     def __init__(self, device: torch.device | str = 'cpu',
                  model: str = 'mace-off-23s',
-                 model_path: Optional[str] = None,
                  implicit: Literal['gbsa', 'none'] = 'none',
                  solvent: str = 'none',
                  dtype=None):
-        """Load model/<model>.pt, or model_path when supplied, at the requested precision."""
+        """Load the registered model at the requested precision."""
         super().__init__()
-        path = model_path or Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
+        path = Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
         native_dtype = _torch.load_model(self, path, device, dtype)
+        head = getattr(self.model, 'selected_head_index', None)
+        native = getattr(self.model, 'model', self.model)
+        heads = getattr(native, 'heads', None)
+        if type(head) is not int or head < 0 or (heads is not None and head >= len(heads)):
+            raise ValueError('MACE artifact requires a valid selected_head_index')
         self.hessian = 'analytic'
         if self.dtype != native_dtype:
             self.model.to(dtype=self.dtype)
@@ -69,17 +74,7 @@ class MACECalculator(CalcABC):
         self.implicit_solv_init(implicit=implicit, solvent=solvent)
 
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        properties = self._normalize_properties(properties)
-        atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        numerical = 'hessian' in requested and self.hessian == 'numerical'
-        if numerical:
-            requested.remove('hessian')
-        result = self._calculate([atoms], requested)
-        if numerical:
-            result['hessian'] = [self.get_hessian(atoms)]
-        self._store_properties(atoms, result)
+        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         data = build_data_from_atoms(atoms_list, self.model, device=self.device, dtype=self.dtype)

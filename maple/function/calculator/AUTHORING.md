@@ -53,7 +53,6 @@ instantiated):
 | `CHECKPOINT_FILENAME` | `dict[str, str] \| None` | Per-name filename for HuggingFace auto-download. `None` if no auto-download. |
 | `REQUIRES_LOCAL_MODEL_FILE` | `bool` | Fallback when `CHECKPOINT_FILENAME` does not cover the requested name. |
 | `OPTION_KEYS` | `tuple[str, ...] \| None` | Supported backend-specific `model_options`. Shipped backends set this so typos fail loudly; `None` keeps legacy plug-ins permissive. |
-| `MODEL_PATH_OPTION` | `str \| None` | Constructor kwarg that consumes an explicit user `model_path` (`'model_path'` or `'checkpoint_path'`). `None` rejects an explicit `model_path` **only when** the constructor also exposes no `model_path`/`checkpoint_path` parameter — `SetCalculator` falls back to inspecting the ctor signature for support detection. The resolved path is still delivered through `build_kwargs_from_options(..., resolved_model_path=...)`, so legacy plug-ins that omit `MODEL_PATH_OPTION` must route that value into their constructor kwargs explicitly. |
 
 Current AIMNet2 uses `OPTION_KEYS=('lr', 'lr_cutoff', 'dtype')` and configures
 the exported model directly. Family-specific options are validated against
@@ -86,7 +85,7 @@ no second coordinate/cell strain in the calculator. For H/HVP the wrapper's
 `training=True` retains the force derivative graph; every module stays in eval
 mode, including the native inference scale/shift. These models require
 Q=0/M=1 and expose no public charge/dipole head or extra dispersion option.
-Install a same-name PT in `model/` or pass `model_path`; HF revision is unchanged.
+Install a same-name PT in `model/` under the registered filename; HF revision is unchanged.
 Torch property tools reuse valid differentiable native forces as `gradient=-F`
 for H/HVP when their layout matches the coordinate tensor. Otherwise complete
 energy AD remains the existing path. Native atomic tensors stay on-device
@@ -172,10 +171,23 @@ member stress/virial come from simultaneous coordinate/cell strain. GraphDef
 output bindings belong to the adapter and require no build-report JSON.
 
 SO3LR uses `so3lr.jax` and its complete model implementation in `so3lr/_model.py`.
+The same calculator accepts `so3lr-tauri-s`, `so3lr-tauri-m` and
+`so3lr-tauri-l`, using same-name `.jax` files pinned to the official 2606
+weights. Tauri inputs bind the official inference head 5, Q and `mult - 1`;
+the original `so3lr` input convention remains unchanged. S/M use a 4.5 Å
+network cutoff and L uses 5 Å. Tauri preserves native NLH repulsion, its
+polarizability and C6 ratio heads, and QDO dispersion. These internal ratio
+heads are not added to the public property list. No `task`/`head` option is
+exposed; named inference tasks have not been defined by the upstream models.
 That module combines the graph's real-space energy with pure JAX reciprocal,
 self and background terms. The calculator binds this complete model call;
 shared `_jax` tools remain model-independent. Workbench uses the same complete
 model implementation while its original native reference remains independent.
+Single-member reciprocal calls accept either the native unpadded one-cell layout
+or the member-plus-dummy two-cell layout. Both use the existing single-cell
+expression; padded multi-member inputs retain the grouped expression. The
+legacy periodic performance fixture keeps its native unpadded layout to cover
+this dispatch. Reciprocal formulas and physical settings are unchanged.
 `lr=auto/cutoff/ewald/pme` retains the qualified physical settings: gas auto
 uses the 1000 Å cutoff route; full-3D periodic auto uses PME with 12 Å real
 space, smearing 4 Å, spacing 2 Å and four interpolation nodes. All energy
@@ -195,7 +207,7 @@ CPU/CUDA placement uses the existing `device` option, with artifact precision
 preserved. TensorFlow/JAX libraries remain optional and are imported only by
 the selected family. The existing TS HVP Tensor bridge imports Torch on demand.
 No HuggingFace revision is changed: new models use the local runtime files or
-an explicit `model_path` until separately uploaded and verified.
+the registered local filename until separately uploaded and verified.
 
 For mixed TensorFlow/Torch processes, the installed CUDA libraries must be
 consistent. On the development host, a TF-first import otherwise resolves
@@ -205,48 +217,35 @@ system CUDA 12.3 before Torch 2.8/cu128. Prepending the existing maple environme
 change is required. TensorFlow GPU memory growth and JAX preallocation settings
 remain process configuration when sharing a device with other applications.
 
-## Minimum runnable subclass
+## Self-describing exports and backend execution
 
-```python
-from maple.function.calculator import CalcABC, register_calculator
-import numpy as np
+SO3LR and FENNIX standard `.jax` files carry metadata-v1 in the static auxiliary
+information of a registered output PyTree. Its dynamic values retain their native
+field names; numerical outputs are still indexable dictionaries. The lightweight
+registration lives in `_jax.py` and imports no native model libraries or
+Torch. Metadata is readable from `Exported.out_tree` before the first forward.
+It is part of the artifact; build/validation reports remain separate diagnostics.
 
+The description records identity, precision, native units and supported elements.
+SO3LR also records the native network cutoff, selected theory head, head width
+and multiplicity-minus-one convention. FENNIX records the native graph/filter
+and block-indexer settings. Calculators validate these against the export input
+signature. Old JAX files without the description require a qualified replacement;
+runtime code does not reconstruct missing settings from model names.
 
-@register_calculator
-class FooCalculator(CalcABC):
-    MODEL_NAMES = ('foo2x', 'foo1ccx')
-    MODEL_ENERGY_UNIT = 'eV'           # or 'hartree' — declare honestly per backend
-    SUPPORTED_HESSIAN_MODES = ('analytic', 'numerical')
-    SUPPORTS_CHARGE_MULT = False
-    SUPPORTS_PBC = False               # fail fast on periodic atoms unless validated
-    CHECKPOINT_FILENAME = {'foo2x': 'foo2x.pt', 'foo1ccx': 'foo1ccx.pt'}
-    REQUIRES_LOCAL_MODEL_FILE = False
-    OPTION_KEYS = ('foo_mode',)
-    MODEL_PATH_OPTION = 'model_path'
+ANI exports declare `supports_atomic_charges` from their native return type.
+ANI-MBIS retains `atomic_charges`; ordinary ANI instances exclude charges/dipole
+from `implemented_properties`. Atomic charge output is independent of supporting
+charged systems: all current ANI recipes still require Q=0, M=1. The
+MACE-OFF/LES/EGRET and OMOL energy adapters do not advertise charges/dipole;
+MACE-LES latent charges remain internal. MACE-POLAR retains its physical outputs. The existing
+nonperiodic dipole-from-physical-charges behavior is preserved.
 
-    implemented_properties = ['energy', 'free_energy', 'forces']
-
-    @classmethod
-    def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):
-        # Translate input-header options + factory-resolved path into ctor kwargs.
-        return {}
-
-    def __init__(self, device, model, *, implicit='none', solvent='none', **backend_kwargs):
-        super().__init__()
-        self.device = device
-        self.hessian = 'analytic'
-        self.implicit_solv_init(implicit=implicit, solvent=solvent)
-        # ...load self.model, etc...
-
-    def calculate(self, atoms=None, properties=['energy'], system_changes=None):
-        atoms = super().calculate(atoms, properties, system_changes)
-        energy, forces = self._forward(atoms)      # private, backend-internal
-        self._finalize_results(atoms, energy=energy, forces=forces)
-
-    def _analytic_hessian(self, atoms) -> np.ndarray:
-        # backend autograd; return np.ndarray (3N, 3N) in Hartree / Å²
-        ...
-```
+Torch adapters share their single-structure request lifecycle in `_torch`;
+FENNIX and SO3LR share it in `_jax`. Family `_calculate` functions keep the native
+forward, grad context, complete-energy composition and property bindings. GRACE
+retains its TensorFlow flow; UMA retains FAIR-Chem. `CalcABC.calculate` keeps its
+ASE preamble contract for independently registered plugins.
 
 ## Unit contract
 
@@ -339,9 +338,11 @@ class FooCalculator(CalcABC):
 - Set `OPTION_KEYS` for every shipped backend-specific option. Unknown keys
   are rejected before model construction so a misspelled production config
   cannot be silently ignored.
-- If explicit `model_path` is supported, set `MODEL_PATH_OPTION`. If a user
-  passes `model_path` to a backend that does not support it, MAPLE raises a
-  configuration error instead of silently falling back to a default checkpoint.
+- Builtin models load their registered filenames. `model_path` is removed from
+  input options and builtin constructors. Model lookup and HF download remain
+  in `SetCalculator`; constructors load the registered model directly.
+  UMA retains its native `checkpoint_path` option and official loading path.
+
 
 ## HVP override
 
@@ -360,7 +361,7 @@ class FooCalculator(CalcABC):
 
 Torch adapters execute complete TorchScript artifacts without native model
 libraries. Periodic and native-batch capabilities follow the qualified artifact
-and its input conditions. Explicit model paths must satisfy the same contract.
+and its input conditions. Registered artifacts must satisfy the same contract.
 
 | Backend (names) | PBC | charge/mult | Hessian | Implicit solvent | D4 | HVP (Dimer) |
 |---|---|---|---|---|---|---|
@@ -387,7 +388,7 @@ them for production chemistry.
 
 | Layer | Mechanism | Status |
 |---|---|---|
-| 1 | Input header `#model=mymodel(module=my_lab.maple_plugin, model_path=/tmp/m.pt)` | Implemented |
+| 1 | Input header `#model=mymodel(module=my_lab.maple_plugin)` | Implemented |
 | 2 | Env var `MAPLE_CALCULATOR_PLUGINS=my_lab.maple_plugin,other.plugin` | Implemented (loaded once per process at first `_build_calculator`) |
 | 3 | Python entry points: `[project.entry-points."maple.calculators"]` | Preview only; not implemented |
 

@@ -23,8 +23,8 @@ def forward(model, data, *, method, shape, cutoff):
         output = model.call(data)
         energy = output['real_space_energy']
         if method != 'cutoff':
-            # A single physical member plus its dummy graph keeps the original path.
-            if data['cell'].shape[0] == 2:
+            # A single member may be unpadded or followed by its dummy graph.
+            if data['cell'].shape[0] in (1, 2):
                 cell = data['cell'][jnp.argmax(data['graph_mask'])]
                 correction = reciprocal_energy(
                     output['partial_charges'], data['positions'], cell, shape, method=method,

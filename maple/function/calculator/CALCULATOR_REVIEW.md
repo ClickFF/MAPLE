@@ -5,8 +5,8 @@
 
 This document records (1) the state of the calculator subsystem as reviewed,
 (2) the inconsistencies that were found, (3) what this branch changed to unify
-them, and (4) the standard a user-supplied calculator must follow. The runnable
-template lives at [`examples/calculator_plugin/`](../../../examples/calculator_plugin/).
+them, and (4) the standard a user-supplied calculator must follow. The calculator
+protocol is documented in [`AUTHORING.md`](AUTHORING.md).
 
 ---
 
@@ -18,8 +18,7 @@ of the contract. Worth stating so we don't re-invent it:
 - **One protocol base class** — `CalcABC` (`calculator_base.py`) declares
   capability via class attributes (`MODEL_NAMES`, `MODEL_ENERGY_UNIT`,
   `SUPPORTED_HESSIAN_MODES`, `SUPPORTS_CHARGE_MULT`, `SUPPORTS_PBC`,
-  `CHECKPOINT_FILENAME`, `REQUIRES_LOCAL_MODEL_FILE`, `OPTION_KEYS`,
-  `MODEL_PATH_OPTION`).
+  `CHECKPOINT_FILENAME`, `REQUIRES_LOCAL_MODEL_FILE`, `OPTION_KEYS`).
 - **One registry + 3-layer plug-in discovery** — `register_calculator`,
   input-header `module=`, and the `MAPLE_CALCULATOR_PLUGINS` env var, all funneled
   through the `SetCalculator` factory.
@@ -44,7 +43,7 @@ So the goal of this branch is **finishing the job**, not designing it from zero.
 | 3 | `_mace_calculator.py` carried **two** builders for the same 20-field dict (`build_data_from_atoms` + `_build_graph_inputs`) | High | Fixed — single `build_data_from_atoms`, used by both `calculate` and `_analytic_hessian` |
 | 4 | Identical row-by-row autograd Hessian loop duplicated in ANI/MACE/MACE-omol/MACE-POLAR | Medium | Fixed — shared `hessian_via_double_autograd()` in `calculator_base.py` |
 | 5 | MACE family did **two** forwards (energy no-grad, then a second forward for forces) | Medium (perf) | Fixed — single `requires_grad`-gated forward, matching ANI/AIMNet2 |
-| 6 | No copy-runnable user template; only an inline snippet in `AUTHORING.md` | Medium (the actual ask) | Fixed — `examples/calculator_plugin/` |
+| 6 | Calculator authoring guidance | Medium | Protocol documented in `AUTHORING.md`; toy examples removed |
 | 7 | Stale `calc.get_energy(...)` examples in `timer.py` docstrings | Low | Fixed — updated to ASE pattern |
 | 8 | `implemented_properties` ordering differed in AIMNet2 | Cosmetic | Fixed — uniform order |
 
@@ -100,18 +99,14 @@ recommended but not required (UMA proves duck-typing works).
   *do* convert inside the backend.
 
 **Loading your own model file (`.pt` / `.jpt` / `.model`)**
-- Set `MODEL_PATH_OPTION = 'model_path'` and route it through
-  `build_kwargs_from_options(..., resolved_model_path=...)` into your `__init__`.
+- Register the model name and its `LOCAL_MODEL_FILENAMES` entry. A custom
+  calculator can consume `resolved_model_path` in `build_kwargs_from_options`;
+  builtin calculators load their registered filenames directly.
 - Your `__init__` owns the load logic — `torch.jit.load`, `torch.load` +
   reconstruct a custom class, or anything else. MAPLE only hands you a validated,
   existing file path.
-- Reach it from input with either:
-  - `#model=mymodel(module=my_pkg.my_plugin, model_path=/abs/path/model.jpt)` —
-    zero source edits, or
-  - drop the file in `maple/function/calculator/model/` for built-in discovery.
-
-See `examples/calculator_plugin/` for two complete, runnable variants (a
-TorchScript loader and a `torch.load` + custom-class loader).
+- Select it with `#model=mymodel(module=my_pkg.my_plugin)`. The registered file
+  can live beside the plugin or in `maple/function/calculator/model/`.
 
 ---
 
@@ -124,3 +119,26 @@ TorchScript loader and a `torch.load` + custom-class loader).
   the ASE protocol + analytic-vs-numerical Hessian tolerance (the manual smoke in
   §2 should become CI).
 - Revisit the UMA exception once stress-unit validation lands.
+
+
+## Calculator contract maintenance (2026-11-05)
+
+Builtin model selection uses the registry; non-UMA `model_path` overrides are
+removed. Standard JAX exports retain runtime metadata in their output PyTree;
+SO3LR/FENNIX consume native configuration instead of duplicating it by name.
+ANI instance charge capabilities follow the saved native-output declaration.
+The identical Torch lifecycle and the FENNIX/SO3LR lifecycle are shared within
+their respective backends, preserving family forwards and derivatives.
+
+SO3LR's complete-model dispatch also recognizes native unpadded single-member
+inputs. The former two-cell-only test sent a one-cell input through grouped
+reciprocal operations. Both one-cell and member-plus-dummy layouts now use the
+existing single-cell expression; reciprocal kernels and physical parameters
+remain unchanged. The native periodic E/F benchmark covers the unpadded case.
+
+Deferred issue: numerical Hessian currently handles FixAtoms explicitly but
+applies other ASE constraints while constructing displacements. A quadratic
+PES with Hxy=0.8 and FixCartesian fixing x produces Hxy=0.4 after symmetrization.
+This is neither the raw Hessian nor the embedded active Cartesian block. A
+separate change must define supported constraint semantics and reject unsupported
+constraints; this contract cleanup does not modify that calculation scheme.

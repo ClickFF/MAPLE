@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Dict, Literal, Optional
+
 import numpy as np
 import torch
 from ase.calculators.calculator import all_changes
-from ..calculator_base import CalcABC, register_calculator
+
 from .. import _inputs, _torch
+from ..calculator_base import CalcABC, register_calculator
 
 
 @register_calculator
@@ -23,23 +26,21 @@ class AIMNet2Calculator(CalcABC):
     SUPPORTS_PBC = True
     REQUIRES_LOCAL_MODEL_FILE = True
     OPTION_KEYS = ('lr', 'lr_cutoff', 'dtype')
-    MODEL_PATH_OPTION = 'model_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': options.get('dtype'),
+        return {'dtype': options.get('dtype'),
                 'lr': options.get('lr', 'auto'), 'lr_cutoff': float(options.get('lr_cutoff', 15.))}
 
     def __init__(self, device: torch.device | str,
                  model: str = 'aimnet2',
-                 model_path: Optional[str] = None,
                  lr: str = 'auto',
                  lr_cutoff: float = 15.,
                  implicit: Literal['gbsa', 'none'] = 'none',
                  solvent: str = 'none',
                  dtype=None):
         super().__init__()
-        path = model_path or Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
+        path = Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
         _torch.load_model(self, path, device, dtype)
         self.hessian = 'analytic'
         self.model_name = model
@@ -96,6 +97,9 @@ class AIMNet2Calculator(CalcABC):
         with torch.jit.optimized_execution(False):
             return self._forward(data)['energy'].sum()
 
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        return _torch.calculate_single(self, atoms, properties, system_changes)
+
     def _calculate(self, atoms_list, properties, vector=None):
         data = self._build_data(None, atoms_list)
         # Keep the validated executor for forward and all derivative orders.
@@ -111,19 +115,6 @@ class AIMNet2Calculator(CalcABC):
                                             strain=strain, volume=volume,
                                             single=vector is not None, vector=vector,
                                             dipole_from_charges=True)
-
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        properties = self._normalize_properties(properties)
-        atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        numerical = 'hessian' in requested and self.hessian == 'numerical'
-        if numerical:
-            requested.remove('hessian')
-        result = self._calculate([atoms], requested)
-        if numerical:
-            result['hessian'] = [self.get_hessian(atoms)]
-        self._store_properties(atoms, result)
 
     def _batch_key(self, atoms):
         return (bool(atoms.pbc.any()),)

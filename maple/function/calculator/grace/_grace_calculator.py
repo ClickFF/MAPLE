@@ -22,19 +22,18 @@ class GRACECalculator(CalcABC):
     SUPPORTS_PBC = True
     LOCAL_MODEL_FILENAMES = {name: name + '.pb' for name in MODEL_NAMES}
     OPTION_KEYS = ('dtype',)
-    MODEL_PATH_OPTION = 'model_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, model_options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': model_options.get('dtype')}
+        return {'dtype': model_options.get('dtype')}
 
-    def __init__(self, device=None, model='grace-off-2m', model_path=None,
+    def __init__(self, device=None, model='grace-off-2m',
                  implicit='none', solvent='none', dtype=None):
         super().__init__()
         if model not in self.MODEL_NAMES:
             raise ValueError(f'Unknown GRACE model: {model!r}')
         self.device = str(device or 'cpu')
-        self.model_path = str(model_path or Path(__file__).resolve().parents[1] / 'model' / (model + '.pb'))
+        self.model_path = str(Path(__file__).resolve().parents[1] / 'model' / self.LOCAL_MODEL_FILENAMES[model])
         self.model = _tensorflow.load_model(self.model_path, self.device)
         self.dtype = self.model.graph.get_tensor_by_name('bond_vector:0').dtype
         if dtype is not None and tf.as_dtype(dtype) != self.dtype:
@@ -129,6 +128,17 @@ class GRACECalculator(CalcABC):
             data['bond_vector'] = tf.fill([max_edges, 3], tf.cast(52., self.dtype))
         return data
 
+    def calculate(self, atoms=None, properties=None, system_changes=None):
+        properties = self._normalize_properties(properties)
+        if system_changes is None:
+            atoms = super().calculate(atoms, properties)
+        else:
+            atoms = super().calculate(atoms, properties, system_changes)
+        requested = ['energy' if name == 'free_energy' else name for name in properties]
+        requested = list(dict.fromkeys(['energy', *requested]))
+        result = self._calculate([atoms], requested)
+        self._store_properties(atoms, result)
+
     def _calculate(self, atoms_list, properties):
         needs_hessian = 'hessian' in properties
         properties = [name for name in properties if name != 'hessian']
@@ -152,17 +162,6 @@ class GRACECalculator(CalcABC):
         if needs_hessian:
             result['hessian'] = [self.get_hessian(atoms) for atoms in atoms_list]
         return result
-
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        properties = self._normalize_properties(properties)
-        if system_changes is None:
-            atoms = super().calculate(atoms, properties)
-        else:
-            atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        result = self._calculate([atoms], requested)
-        self._store_properties(atoms, result)
 
     def _calculate_batch(self, atoms_list, properties):
         if not bool(tf.get_static_value(self.model.graph.get_tensor_by_name('supports_native_batch:0'))):

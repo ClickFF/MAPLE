@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional
-import torch
+
 import numpy as np
+import torch
 from ase.calculators.calculator import all_changes
-from ..calculator_base import CalcABC, register_calculator, parse_bool_option
+
 from .. import _inputs, _torch
+from ..calculator_base import CalcABC, register_calculator, parse_bool_option
 
 
 @register_calculator
@@ -23,43 +25,38 @@ class ANICalculator(CalcABC):
     SUPPORTS_PBC = True
     SUPPORTS_CHARGE_MULT = False
     REQUIRES_LOCAL_MODEL_FILE = True
-    MODEL_PATH_OPTION = 'model_path'
     OPTION_KEYS = ('d4', 'dtype')
 
     @classmethod
     def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):
-        return {'model_path': resolved_model_path, 'dtype': options.get('dtype'),
+        return {'dtype': options.get('dtype'),
                 'd4': parse_bool_option(options.get('d4', False), name='d4')}
 
     def __init__(self, device,
                  model: str = 'ani2x',
-                 model_path: Optional[str] = None,
                  overwrite=False,
                  d4=False,
                  implicit: str = 'none',
                  solvent: str = 'none',
                  dtype=None):
         super().__init__()
-        path = model_path or Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
+        path = Path(__file__).resolve().parents[1] / 'model' / (model + '.pt')
         _torch.load_model(self, path, device, dtype)
+        charges = getattr(self.model, 'supports_atomic_charges', None)
+        if not isinstance(charges, bool):
+            raise ValueError('ANI artifact requires boolean supports_atomic_charges; install a qualified export')
+        self.implemented_properties = list(type(self).implemented_properties)
+        if not charges:
+            self.implemented_properties = [p for p in self.implemented_properties if p not in ('charges', 'dipole')]
         self.hessian = 'analytic'
         self.model_name, self.overwrite, self.d4 = model, overwrite, d4
         if d4 and getattr(self.model, 'model_name', model) == 'ani2dr':
             raise ValueError('ani2dr already contains native dispersion; extra D4 is unsupported')
         self.implicit_solv_init(implicit=implicit, solvent=solvent)
 
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        properties = self._normalize_properties(properties)
-        atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        numerical = 'hessian' in requested and self.hessian == 'numerical'
-        if numerical:
-            requested.remove('hessian')
-        result = self._calculate([atoms], requested)
-        if numerical:
-            result['hessian'] = [self.get_hessian(atoms)]
-        self._store_properties(atoms, result)
+    def _validate_dispersion(self, atoms_list):
+        if self.d4 and any(atoms.pbc.any() for atoms in atoms_list):
+            raise ValueError('External D4 has no periodic cell/PBC implementation')
 
     def _forward(self, data):
         output = self.model((data['numbers'], data['positions']),
@@ -81,6 +78,22 @@ class ANICalculator(CalcABC):
                                   supported_elements=self.model.atomic_numbers.tolist())
         data['positions'] = coordinates
         return self._forward(data)['energy']
+
+    def dftd4(self, species, coordinates):
+        import tad_dftd4 as d4
+        charge = coordinates.new_tensor(0.)
+        param = {
+            's6': coordinates.new_tensor(1.0),
+            's8': coordinates.new_tensor(0.34783580),
+            's9': coordinates.new_tensor(1.0),
+            'a1': coordinates.new_tensor(0.57488291),
+            'a2': coordinates.new_tensor(6.41921802),
+        }
+        bohr_coords = coordinates[0] * 1.8897261245864
+        return torch.sum(d4.dftd4(species[0], bohr_coords, charge, param))
+
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         self._validate_dispersion(atoms_list)
@@ -130,20 +143,3 @@ class ANICalculator(CalcABC):
         if getattr(self, 'solvent_correction', None) is not None:
             return super().get_hvp(atoms, n)
         return self._calculate([atoms], ['hvp'], vector=n)['hvp']
-
-    def _validate_dispersion(self, atoms_list):
-        if self.d4 and any(atoms.pbc.any() for atoms in atoms_list):
-            raise ValueError('External D4 has no periodic cell/PBC implementation')
-
-    def dftd4(self, species, coordinates):
-        import tad_dftd4 as d4
-        charge = coordinates.new_tensor(0.)
-        param = {
-            's6': coordinates.new_tensor(1.0),
-            's8': coordinates.new_tensor(0.34783580),
-            's9': coordinates.new_tensor(1.0),
-            'a1': coordinates.new_tensor(0.57488291),
-            'a2': coordinates.new_tensor(6.41921802),
-        }
-        bohr_coords = coordinates[0] * 1.8897261245864
-        return torch.sum(d4.dftd4(species[0], bohr_coords, charge, param))
