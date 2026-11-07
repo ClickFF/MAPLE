@@ -131,9 +131,9 @@ class MACEPolCalculator(CalcABC):
         # Charge and spin from atoms.info (default: 0, singlet)
         charge = float(atoms.info.get('charge', 0))
         mult = _integer_info(atoms, 'mult', 1)
-        spin = float(mult - 1)
         total_charge = torch.tensor([charge], dtype=dtype, device=device)
-        total_spin = torch.tensor([spin], dtype=dtype, device=device)
+        # PolarMACE subtracts one internally; total_spin is the multiplicity.
+        total_spin = torch.tensor([float(mult)], dtype=dtype, device=device)
 
         # No external field for pure MLIP
         external_field = torch.zeros(N, 3, dtype=dtype, device=device)
