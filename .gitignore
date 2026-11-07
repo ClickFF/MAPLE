@@ -188,6 +188,9 @@ examples/opt/exp-solv/*.xyz
 maple/function/dispatcher/parmfit/doc/
 maple/function/dispatcher/parmfit/test/
 
+# Local temporary validation scripts
+/tests/
+
 # Dock artifacts
 maple/function/dispatcher/dock/doc/
 maple/function/dispatcher/dock/test/
