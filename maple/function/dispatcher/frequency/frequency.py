@@ -357,83 +357,63 @@ class FrequencyBase(JobABC):
      
         raise NotImplementedError("Subclasses must implement compute_frequencies().")
 
-    def _build_translation_rotation_basis(self, masses: np.ndarray, positions: np.ndarray) -> np.ndarray:
-        """
-        Construct orthogonal basis for translations and rotations (mass-weighted).
-        
-        Args:
-            masses: Atomic masses (N,)
-            positions: Atomic positions (N, 3) in Angstrom
-        
-        Returns:
-            D: Translation + rotation basis vectors (3N, 6) in mass-weighted space
-        """
-        n_atoms = len(masses)
-        D = np.zeros((3 * n_atoms, 6))
-        
-        # Center of mass
-        total_mass = np.sum(masses)
-        com = np.sum(positions * masses[:, None], axis=0) / total_mass
-        
-        # Translation modes (columns 0-2)
-        for i in range(n_atoms):
-            sqrt_m = np.sqrt(masses[i])
-            D[3*i:3*i+3, 0] = [sqrt_m, 0, 0]      # x-translation
-            D[3*i:3*i+3, 1] = [0, sqrt_m, 0]      # y-translation
-            D[3*i:3*i+3, 2] = [0, 0, sqrt_m]      # z-translation
-        
-        # Rotation modes (columns 3-5)
-        # δr = ω × r, where r is position relative to COM
-        for i in range(n_atoms):
-            r = positions[i] - com
-            sqrt_m = np.sqrt(masses[i])
-            
-            # Rotation around x-axis: δr = (0, r_z, -r_y)
-            D[3*i:3*i+3, 3] = sqrt_m * np.array([0, r[2], -r[1]])
-            
-            # Rotation around y-axis: δr = (-r_z, 0, r_x)
-            D[3*i:3*i+3, 4] = sqrt_m * np.array([-r[2], 0, r[0]])
-            
-            # Rotation around z-axis: δr = (r_y, -r_x, 0)
-            D[3*i:3*i+3, 5] = sqrt_m * np.array([r[1], -r[0], 0])
-        
-        return D
-        
+    def _mass_weighted_rigid_basis(self) -> np.ndarray:
+        """Build an orthonormal basis of mass-weighted rigid motions."""
+        atoms = self.atoms
+        masses = np.asarray(atoms.get_masses(), dtype=float)
+        positions = np.asarray(atoms.get_positions(), dtype=float)
+        if not np.all(np.isfinite(masses)) or np.any(masses <= 0.0):
+            raise ValueError("Rigid-body analysis requires finite, positive masses")
+        if not np.all(np.isfinite(positions)):
+            raise ValueError("Rigid-body analysis requires finite positions")
+
+        n_atoms = len(atoms)
+        if not n_atoms:
+            return np.empty((0, 0))
+
+        sqrt_masses = np.sqrt(masses)
+        translations = np.zeros((3 * n_atoms, 3))
+        for atom_index, sqrt_mass in enumerate(sqrt_masses):
+            block = slice(3 * atom_index, 3 * atom_index + 3)
+            translations[block] = sqrt_mass * np.eye(3)
+        translations /= np.sqrt(np.sum(masses))
+
+        if np.any(atoms.get_pbc()):
+            return translations
+
+        center = np.average(positions, axis=0, weights=masses)
+        rotations = np.zeros((3 * n_atoms, 3))
+        for atom_index, (position, sqrt_mass) in enumerate(
+            zip(positions - center, sqrt_masses)
+        ):
+            block = slice(3 * atom_index, 3 * atom_index + 3)
+            for axis_index, axis in enumerate(np.eye(3)):
+                rotations[block, axis_index] = sqrt_mass * np.cross(axis, position)
+
+        rotations -= translations @ (translations.T @ rotations)
+        rotation_vectors, singular_values, _ = np.linalg.svd(
+            rotations, full_matrices=False
+        )
+        tolerance = (
+            max(rotations.shape)
+            * np.finfo(rotations.dtype).eps
+            * singular_values[0]
+        )
+        retained_rotations = rotation_vectors[:, singular_values > tolerance]
+        combined = np.column_stack((translations, retained_rotations))
+        return np.linalg.qr(combined, mode="reduced")[0]
+
     def _project_hessian(self, hessian: np.ndarray) -> np.ndarray:
+        """Project rigid translations and rotations from a mass-weighted Hessian.
+
+        The rigid basis and Hessian must use the same mass-weighted coordinate
+        space. Projecting the Cartesian Hessian with a mass-weighted basis and
+        applying mass weighting afterward changes the vibrational eigenproblem.
         """
-        Project out translation and rotation components from Hessian.
-        
-        Principle:
-            H_proj = P^T @ H @ P
-            where P = I - Q @ Q^T, Q is orthonormal translation-rotation basis
-        
-        Args:
-            hessian: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
-        
-        Returns:
-            Projected Hessian (3N, 3N)
-        """
-        masses = self.atoms.get_masses()
-        positions = self.atoms.get_positions()
-        
-        # Step 1: Build translation-rotation basis
-        D = self._build_translation_rotation_basis(masses, positions)
-        
-        # Step 2: Orthonormalize via QR decomposition
-        Q, _ = np.linalg.qr(D)
-        
-        # Step 3: Construct projection operator
-        # P = I - Q @ Q^T projects onto the subspace orthogonal to translations/rotations
-        n_dof = len(hessian)
-        P = np.eye(n_dof) - Q @ Q.T
-        
-        # Step 4: Project Hessian
-        H_projected = P @ hessian @ P
-        
-        # Step 5: Symmetrize to eliminate floating-point asymmetry
-        H_projected = 0.5 * (H_projected + H_projected.T)
-        
-        return H_projected
+        Q = self._mass_weighted_rigid_basis()
+        P = np.eye(len(hessian)) - Q @ Q.T
+        projected = P @ hessian @ P
+        return 0.5 * (projected + projected.T)
 
     def compute_thermo(self, frequencies_cm1: np.ndarray) -> ThermoResults:
         """
@@ -760,7 +740,7 @@ class FrequencyBase(JobABC):
         self.log_info(["GIBBS FREE ENERGY\n"])
         self.log_info(["-" * 60 + "\n\n"])
         self.log_info([f"Total enthalpy correction        ...   {h_total_kcal:10.2f} kcal/mol\n"])
-        self.log_info([f"Total entropy correction         ...   {-T * s_total_kcalK * 1e-3:10.2f} kcal/mol\n"])
+        self.log_info([f"Total entropy correction         ...   {-T * s_total_kcalK:10.2f} kcal/mol\n"])
         self.log_info(["-" * 60 + "\n"])
         self.log_info([f"Final Gibbs free energy corr.    ...   {g_corr_kcal:10.2f} kcal/mol\n\n"])
 
@@ -1025,18 +1005,17 @@ class MWFrequency(FrequencyBase):
         """
         masses = np.asarray(self.atoms.get_masses())
         
-        # Step 1: Project out translations and rotations
-        if self.verbosity >= 2:
-            self.log_info(["Projecting out translations and rotations...\n"])
-        
-        hessian_proj = self._project_hessian(hessian_matrix)
-        
-        # Step 2: Mass-weighting transformation
+        # Step 1: Mass-weighting transformation
         # H_mw = M^{-1/2} @ H @ M^{-1/2}
         # where M is in amu (consistent with Hessian in Angstrom²)
         inv_sqrt_m = np.repeat(1.0 / np.sqrt(masses), 3)
-        h_mw = hessian_proj * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
-        
+        h_mw = hessian_matrix * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
+
+        # Step 2: Project rigid motions in the same mass-weighted space.
+        if self.verbosity >= 2:
+            self.log_info(["Projecting out translations and rotations...\n"])
+        h_mw = self._project_hessian(h_mw)
+
         # Step 3: Diagonalize mass-weighted Hessian
         evals, evecs_mw = self._eigh(h_mw)
         
@@ -1168,6 +1147,7 @@ class BothFrequency(FrequencyBase):
         masses = np.asarray(self.atoms.get_masses())
         inv_sqrt_m = np.repeat(1.0 / np.sqrt(masses), 3)
         h_m = hessian * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
+        h_m = self._project_hessian(h_m)
         evals, evecs_mw = self._eigh(h_m)
 
         conversion = 2721.1383  # Ha/Angstrom² + amu -> cm⁻¹
