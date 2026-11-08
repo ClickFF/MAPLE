@@ -362,14 +362,7 @@ class FrequencyBase(JobABC):
         atoms = self.atoms
         masses = np.asarray(atoms.get_masses(), dtype=float)
         positions = np.asarray(atoms.get_positions(), dtype=float)
-        if not np.all(np.isfinite(masses)) or np.any(masses <= 0.0):
-            raise ValueError("Rigid-body analysis requires finite, positive masses")
-        if not np.all(np.isfinite(positions)):
-            raise ValueError("Rigid-body analysis requires finite positions")
-
         n_atoms = len(atoms)
-        if not n_atoms:
-            return np.empty((0, 0))
 
         sqrt_masses = np.sqrt(masses)
         translations = np.zeros((3 * n_atoms, 3))
@@ -378,17 +371,15 @@ class FrequencyBase(JobABC):
             translations[block] = sqrt_mass * np.eye(3)
         translations /= np.sqrt(np.sum(masses))
 
-        if np.any(atoms.get_pbc()):
-            return translations
-
         center = np.average(positions, axis=0, weights=masses)
         rotations = np.zeros((3 * n_atoms, 3))
         for atom_index, (position, sqrt_mass) in enumerate(
             zip(positions - center, sqrt_masses)
         ):
             block = slice(3 * atom_index, 3 * atom_index + 3)
-            for axis_index, axis in enumerate(np.eye(3)):
-                rotations[block, axis_index] = sqrt_mass * np.cross(axis, position)
+            rotations[block, 0] = sqrt_mass * np.array([0, position[2], -position[1]])
+            rotations[block, 1] = sqrt_mass * np.array([-position[2], 0, position[0]])
+            rotations[block, 2] = sqrt_mass * np.array([position[1], -position[0], 0])
 
         rotations -= translations @ (translations.T @ rotations)
         rotation_vectors, singular_values, _ = np.linalg.svd(
