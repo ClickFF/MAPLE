@@ -159,9 +159,6 @@ class SO3LRCalculator(CalcABC):
             }
         return self._compiled[key]
 
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        return _jax.calculate_single(self, atoms, properties, system_changes)
-
     def _calculate(self, atoms_list, properties):
         needs_hessian = 'hessian' in properties
         properties = [name for name in properties if name != 'hessian']

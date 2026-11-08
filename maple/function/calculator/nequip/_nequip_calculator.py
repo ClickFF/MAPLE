@@ -3,7 +3,6 @@ from typing import Literal
 
 import numpy as np
 import torch
-from ase.calculators.calculator import all_changes
 
 from .. import _inputs, _torch
 from ..calculator_base import CalcABC, register_calculator
@@ -49,9 +48,6 @@ class NequIPCalculator(CalcABC):
             atoms_list, _inputs._species(self.model.atomic_numbers), float(self.model.r_max),
             device=self.device, dtype=self.dtype, input_fields=self.model.input_fields,
         )
-
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         data = self._build_inputs(atoms_list)

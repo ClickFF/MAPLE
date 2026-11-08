@@ -120,6 +120,11 @@ padding. They do not infer charges or dipoles. Charges and dipoles retain their
 native units through the base conversion. Torch keeps its runtime autograd
 flow; JAX and TensorFlow retain their bound, compiled derivative functions.
 
+`CalcABC.calculate` owns the single-system ASE request, state and result storage.
+Family calculators inherit it and implement `_calculate(atoms_list, properties)`
+for model evaluation. Framework helpers supply numerical operations; the model
+call and native output meanings belong to the family calculator.
+
 Torch loading requires boolean `supports_native_batch` and
 `supports_native_pbc_batch` fields in the PT. Concrete calculators read those
 fields in `_calculate_batch`; they do not copy them onto the calculator.

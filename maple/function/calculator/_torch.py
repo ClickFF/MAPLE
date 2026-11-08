@@ -242,19 +242,3 @@ def tensor_properties(energy, positions, members, properties, *, outputs=None,
         results["hvp"] = (products[0], forces[0], energy[0].detach().clone()) if single else (
             products, forces, energy.detach().clone())
     return _convert_properties(results, source_unit=source_unit)
-
-
-def calculate_single(calc, atoms, properties, system_changes):
-    """One ASE request using this backend's existing property evaluator."""
-    from .calculator_base import CalcABC
-    properties = calc._normalize_properties(properties)
-    atoms = CalcABC.calculate(calc, atoms, properties, system_changes)
-    requested = ['energy' if name == 'free_energy' else name for name in properties]
-    requested = list(dict.fromkeys(['energy', *requested]))
-    numerical = 'hessian' in requested and calc.hessian == 'numerical'
-    if numerical:
-        requested.remove('hessian')
-    result = calc._calculate([atoms], requested)
-    if numerical:
-        result['hessian'] = [calc.get_hessian(atoms)]
-    calc._store_properties(atoms, result)

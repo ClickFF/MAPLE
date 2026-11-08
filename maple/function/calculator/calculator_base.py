@@ -310,6 +310,8 @@ class CalcABC(ase.calculators.calculator.Calculator):
         properties=None,
         system_changes=ase.calculators.calculator.all_changes,
     ):
+        """Evaluate one ASE request and store its results through the shared lifecycle."""
+        properties = self._normalize_properties(properties)
         target_atoms = atoms if atoms is not None else getattr(self, 'atoms', None)
         # A failed direct request must never leave a prior geometry/state's
         # results attached to ASE's newly copied atoms.
@@ -320,9 +322,24 @@ class CalcABC(ase.calculators.calculator.Calculator):
         if unknown:
             raise ase.calculators.calculator.PropertyNotImplementedError(
                 f'Unsupported calculator properties: {sorted(unknown)}')
+        if system_changes is None:
+            system_changes = ase.calculators.calculator.all_changes
         super().calculate(atoms, properties, system_changes)
         self._input_state = self._calculation_state(target_atoms)
-        return target_atoms
+        evaluate = getattr(self, '_calculate', None)
+        if evaluate is None:
+            # Legacy calculators call super() before performing their own evaluation.
+            return target_atoms
+        requested = ['energy' if name == 'free_energy' else name for name in properties]
+        requested = list(dict.fromkeys(['energy', *requested]))
+        numerical = ('hessian' in requested and
+                     getattr(self, 'hessian', self.SUPPORTED_HESSIAN_MODES[0]) == 'numerical')
+        if numerical:
+            requested.remove('hessian')
+        result = evaluate([target_atoms], requested)
+        if numerical:
+            result['hessian'] = [self.get_hessian(target_atoms)]
+        self._store_properties(target_atoms, result)
 
     @classmethod
     def build_kwargs_from_options(cls, model, model_options, *, resolved_model_path=None):

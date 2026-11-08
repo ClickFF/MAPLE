@@ -174,17 +174,3 @@ def array_properties(energy, members, properties, *, forces=None, charges=None, 
         if 'virial' in properties:
             result['virial'] = -derivative
     return _convert_properties(result, source_unit=source_unit)
-
-
-def calculate_single(calc, atoms, properties, system_changes):
-    """One ASE request using this backend's existing property evaluator."""
-    from .calculator_base import CalcABC
-    properties = calc._normalize_properties(properties)
-    if system_changes is None:
-        atoms = CalcABC.calculate(calc, atoms, properties)
-    else:
-        atoms = CalcABC.calculate(calc, atoms, properties, system_changes)
-    requested = ['energy' if name == 'free_energy' else name for name in properties]
-    requested = list(dict.fromkeys(['energy', *requested]))
-    result = calc._calculate([atoms], requested)
-    calc._store_properties(atoms, result)

@@ -128,17 +128,6 @@ class GRACECalculator(CalcABC):
             data['bond_vector'] = tf.fill([max_edges, 3], tf.cast(52., self.dtype))
         return data
 
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        properties = self._normalize_properties(properties)
-        if system_changes is None:
-            atoms = super().calculate(atoms, properties)
-        else:
-            atoms = super().calculate(atoms, properties, system_changes)
-        requested = ['energy' if name == 'free_energy' else name for name in properties]
-        requested = list(dict.fromkeys(['energy', *requested]))
-        result = self._calculate([atoms], requested)
-        self._store_properties(atoms, result)
-
     def _calculate(self, atoms_list, properties):
         needs_hessian = 'hessian' in properties
         properties = [name for name in properties if name != 'hessian']

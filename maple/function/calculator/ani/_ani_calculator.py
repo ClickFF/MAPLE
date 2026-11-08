@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from ase.calculators.calculator import all_changes
 
 from .. import _inputs, _torch
 from ..calculator_base import CalcABC, register_calculator, parse_bool_option
@@ -91,9 +90,6 @@ class ANICalculator(CalcABC):
         }
         bohr_coords = coordinates[0] * 1.8897261245864
         return torch.sum(d4.dftd4(species[0], bohr_coords, charge, param))
-
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         self._validate_dispersion(atoms_list)

@@ -5,7 +5,6 @@ from typing import Dict, Literal, Optional
 
 import numpy as np
 import torch
-from ase.calculators.calculator import all_changes
 
 from .. import _inputs, _torch
 from ..calculator_base import CalcABC, register_calculator
@@ -96,9 +95,6 @@ class AIMNet2Calculator(CalcABC):
         """Return complete model energy in eV with the current LR configuration."""
         with torch.jit.optimized_execution(False):
             return self._forward(data)['energy'].sum()
-
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         data = self._build_data(None, atoms_list)

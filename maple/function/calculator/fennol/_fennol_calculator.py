@@ -183,10 +183,6 @@ class FeNNolCalculator(CalcABC):
                     graph['pbc_shifts'] = np.zeros((len(graph['edge_src']), 3), np.int32)
         return jax.device_put(data, self.jax_device)
 
-    def calculate(self, atoms=None, properties=None, system_changes=None):
-        from .. import _jax
-        return _jax.calculate_single(self, atoms, properties, system_changes)
-
     def _calculate(self, atoms_list, properties):
         import jax.numpy as jnp
         from .. import _jax

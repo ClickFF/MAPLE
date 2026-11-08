@@ -24,6 +24,24 @@ HF_REPO_ID = 'Wayne7815/MAPLE_models'
 HF_MODEL_REVISION = 'd5d8eb902246fb3f0e3b24e0d4bbcdc12f12e816'
 _COMMON_MODEL_OPTION_KEYS = {'module', 'hessian'}
 
+# Historical public names map to the current artifact and metadata identities.
+MODEL_ALIASES = {
+    'aimnet2nse': 'aimnet2-nse',
+    'maceoff23s': 'mace-off-23s',
+    'maceoff23m': 'mace-off-23m',
+    'maceoff23l': 'mace-off-23l',
+    'egret': 'egret-1s',
+    'maceomol': 'mace-omol-0',
+    'macepols': 'mace-polar-1s',
+    'macepolm': 'mace-polar-1m',
+    'macepoll': 'mace-polar-1l',
+    'fennix-bio1s': 'fennix-bio-1s',
+    'fennix-bio1m': 'fennix-bio-1m',
+    'so3lr-t-s': 'so3lr-tauri-s',
+    'so3lr-t-m': 'so3lr-tauri-m',
+    'so3lr-t-l': 'so3lr-tauri-l',
+}
+
 
 # Static seed map: builtin name → module that registers the calculator class.
 # External users add backends via input-header `module=` or the
@@ -79,6 +97,22 @@ _BUILTIN_NAME_TO_MODULE = {
 }
 
 _plugins_loaded_from_env = False
+
+
+def _compact_model_name(name: str) -> str:
+    return str(name).strip().lower().translate(str.maketrans('', '', '-_ ()'))
+
+
+_BUILTIN_ALIAS_TO_NAME = {
+    _compact_model_name(name): name for name in _BUILTIN_NAME_TO_MODULE
+}
+_BUILTIN_ALIAS_TO_NAME.update({
+    _compact_model_name(alias): name for alias, name in MODEL_ALIASES.items()
+})
+
+
+def _builtin_canonical_name(name: str) -> Optional[str]:
+    return _BUILTIN_ALIAS_TO_NAME.get(_compact_model_name(name))
 
 
 def _model_download_url(filename: str) -> str:
@@ -217,7 +251,8 @@ class SetCalculator:
         if module_override:
             import_calculator_plugin(str(module_override))
         else:
-            builtin_module = _BUILTIN_NAME_TO_MODULE.get(normalized)
+            builtin_name = _builtin_canonical_name(normalized)
+            builtin_module = _BUILTIN_NAME_TO_MODULE.get(builtin_name)
             if builtin_module is not None:
                 importlib.import_module(builtin_module)
 
@@ -227,6 +262,13 @@ class SetCalculator:
             return cls
         except KeyError:
             pass
+
+        builtin_name = _builtin_canonical_name(normalized)
+        if builtin_name is not None and builtin_name != normalized:
+            importlib.import_module(_BUILTIN_NAME_TO_MODULE[builtin_name])
+            cls = get_registered_calculator(builtin_name)
+            self.model = builtin_name
+            return cls
 
         raise ValueError(f"Unsupported model: '{name}'.")
 

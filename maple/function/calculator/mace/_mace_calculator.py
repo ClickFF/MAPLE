@@ -3,7 +3,6 @@ from typing import Literal, Optional
 
 import numpy as np
 import torch
-from ase.calculators.calculator import all_changes
 
 from .. import _inputs, _torch
 from ..calculator_base import CalcABC, register_calculator
@@ -72,9 +71,6 @@ class MACECalculator(CalcABC):
             self.model.to(dtype=self.dtype)
         self.model_name = model
         self.implicit_solv_init(implicit=implicit, solvent=solvent)
-
-    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
-        return _torch.calculate_single(self, atoms, properties, system_changes)
 
     def _calculate(self, atoms_list, properties, vector=None):
         data = build_data_from_atoms(atoms_list, self.model, device=self.device, dtype=self.dtype)
