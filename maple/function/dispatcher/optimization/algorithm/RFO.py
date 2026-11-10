@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._batch import energy_forces_single
 
 from ._common import (
     compute_metrics,
@@ -76,9 +77,11 @@ class RFO(JobABC):
         iteration = 0
 
         # initial energy/forces
-        E = to_numpy_f64(atoms.get_potential_energy(force_consistent=True))
-        write_xyz(opt_traj_file, [atoms.copy()], energies=[float(E)])
-        F = to_numpy_f64(atoms.get_forces())
+        E, F = energy_forces_single(atoms.calc, atoms)
+        write_xyz(opt_traj_file, [atoms.copy()], energies=[float(E)], forces=[F])
+
+        self.results = {'atoms': atoms, 'energy': E, 'forces': F,
+                        'iterations': 0, 'converged': False}
 
         # main loop
         while iteration < self.params.max_iter:
@@ -107,8 +110,12 @@ class RFO(JobABC):
             atoms.set_positions(X_new)
 
             # Evaluate actual energy and forces at trial
-            E_new = to_numpy_f64(atoms.get_potential_energy(force_consistent=True))
-            F_new = to_numpy_f64(atoms.get_forces())
+            try:
+                E_new, F_new = energy_forces_single(atoms.calc, atoms)
+            except Exception:
+                atoms.set_positions(X)
+                raise
+            s_cart = (atoms.positions - X).reshape(-1)
 
             actual_change = float(E_new - E_old)
             rho = None
@@ -144,12 +151,15 @@ class RFO(JobABC):
 
                 # trajectory
                 converged = is_converged(atoms)
+                self.results.update(energy=E_new, forces=F_new, iterations=iteration + 1,
+                                    converged=converged)
                 write_xyz(
                     opt_traj_file,
                     [atoms.copy()],
                     energies=[float(E_new)],
                     mode="a",
                     start_index=iteration + 1,
+                    forces=[F_new],
                 )
 
                 # convergence check
@@ -158,7 +168,7 @@ class RFO(JobABC):
                         float(E_new),
                         f"RFO optimization converged at iteration {iteration + 1}.",
                         opt_traj_file,
-                        final_path_label="Final optimized structure written to:",
+                        final_path_label="Final optimized structure written to:", forces=F_new,
                     )
                     return atoms
 
@@ -172,18 +182,17 @@ class RFO(JobABC):
                 atoms.set_positions(X)  # rollback
                 self.trust_radius = max(self.params.trust_radius_min, 0.5 * self.trust_radius)
                 # re-evaluate current E/F (at the old geometry)
-                E = to_numpy_f64(atoms.get_potential_energy(force_consistent=True))
-                F = to_numpy_f64(atoms.get_forces())
+                E, F = E_old, F_cart
                 # log the rejection event
                 # self._log_rejection(iteration + 1, rho)
 
         # max iterations reached
-        e_final = float(to_numpy_f64(atoms.get_potential_energy(force_consistent=True)))
+        e_final = float(E)
         self._finalize_run(
             e_final,
             f"RFO optimization reached max iterations ({self.params.max_iter}).",
             opt_traj_file,
-            final_path_label="Last optimized structure written to:",
+            final_path_label="Last optimized structure written to:", forces=F,
         )
         return atoms
 
@@ -312,12 +321,13 @@ class RFO(JobABC):
         summary: str,
         opt_traj_file: str,
         final_path_label: str,
+        forces=None,
     ) -> None:
         """Write final optimized structure and log the closing summary."""
         base, _ = os.path.splitext(self.output)
         output_pdb = self.atoms.info.get("pdb_template")
         opt_file = base + ("_opt.pdb" if output_pdb else "_opt.xyz")
-        write_xyz(opt_file, [self.atoms], energies=[energy])
+        write_xyz(opt_file, [self.atoms], energies=[energy], forces=[forces])
         if self.params.verbose != 1 and self._last_iter_info is not None:
             self.log_info(self._last_iter_info)
 

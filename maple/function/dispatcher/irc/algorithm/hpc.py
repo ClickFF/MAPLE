@@ -19,15 +19,18 @@ Units:
 """
 
 import os
+from contextlib import nullcontext
 from collections import deque
 from dataclasses import dataclass, fields
 from typing import List, Optional, Dict, Tuple
 
 import numpy as np
 from ase import Atoms
+from maple.function.read.filereader.pdb_reader import write_pdb_trajectory
+from maple.function.calculator._inputs import _state
 
 from .logger import log_info, log_error
-from maple.function.read.filereader.pdb_reader import write_pdb_trajectory
+from maple.function.calculator._batch import energy_forces_single, hessian_single
 
 # =============================== Utilities ===============================
 BOHR_TO_ANG = 0.529177210903
@@ -79,23 +82,56 @@ def masses_D(atoms: Atoms) -> np.ndarray:
     return v1(1.0 / np.sqrt(np.repeat(m, 3)))
 
 
-def write_xyz(path: str, atoms_list: List[Atoms], energies: Optional[List[float]] = None):
-    """Write a list of structures to an XYZ file."""
+def write_xyz(path, atoms_list: List[Atoms],
+              energies: Optional[List[float]] = None,
+              mode: str = "w",
+              start_index: int = 0,
+              forces: Optional[List[np.ndarray]] = None,
+              comments: Optional[List[str]] = None) -> None:
+    """Write supplied XYZ frames to a path or stream without evaluating them."""
     if atoms_list and atoms_list[0].info.get("pdb_template"):
-        write_pdb_trajectory(path, atoms_list, energies=energies)
+        write_pdb_trajectory(
+            path,
+            atoms_list,
+            energies=energies,
+            mode=mode,
+            start_index=start_index,
+        )
         return
-    with open(path, "w") as f:
-        for i, at in enumerate(atoms_list):
-            pos = at.get_positions()
-            symbols = at.get_chemical_symbols()
-            f.write(f"{len(symbols)}\n")
-            if energies is not None and i < len(energies):
-                f.write(f"Image {i}  Energy = {energies[i]:.10f}\n")
-            else:
-                f.write(f"Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
+    blocks = []
+    for i, at in enumerate(atoms_list):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+        image_index = start_index + i
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [comments[i] if comments is not None else f"Image {image_index}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(path) if hasattr(path, 'write') else open(path, mode)) as f:
+        f.writelines(blocks)
+        f.flush()
 
 def _norm(v: np.ndarray) -> float:
     return float(np.linalg.norm(v))
@@ -225,6 +261,7 @@ class HPCParams:
     # Output controls
     print_each: bool = True
     write_traj: bool = True
+    batch_size: Optional[int] = None
 
 
 # ================================== HPC ===================================
@@ -352,7 +389,7 @@ class HPC:
         )
 
         # Reference TS energy
-        E_ts = float(self.atoms.get_potential_energy(force_consistent=True))
+        E_ts, F_ts_cart = energy_forces_single(self.atoms.calc, self.atoms)
 
         # Store original TS Cartesian positions, reused for both directions
         R_ts_cart = self.atoms.get_positions().copy().reshape(-1)
@@ -364,6 +401,8 @@ class HPC:
             q_ts_cart=R_ts_cart,
             v_neg_mw=v_neg_mw,
             E_ts=E_ts,
+            H_cart_ts=H_cart_ts,
+            F_ts_cart=F_ts_cart,
         )
         backward_log = self._one_side(
             forward=False,
@@ -371,6 +410,8 @@ class HPC:
             q_ts_cart=R_ts_cart,
             v_neg_mw=v_neg_mw,
             E_ts=E_ts,
+            H_cart_ts=H_cart_ts,
+            F_ts_cart=F_ts_cart,
         )
 
         merged = self._merge_and_mark_ts(forward_log, backward_log)
@@ -419,7 +460,7 @@ class HPC:
         Assumes atoms.calc implements get_hessian(atoms) and returns 3N x 3N
         or shape (1, 3N, 3N).
         """
-        H = self.atoms.calc.get_hessian(self.atoms)
+        H = hessian_single(self.atoms.calc, self.atoms, self.p.batch_size)
         H = to_f64(H)
         if H.ndim == 3 and H.shape[0] == 1:
             H = H[0]
@@ -436,9 +477,8 @@ class HPC:
         """
         q_cart = self._cart_from_mw(q_mw)
         self.atoms.set_positions(q_cart.reshape(-1, 3))
-        E = float(self.atoms.get_potential_energy(force_consistent=True))
-        F_cart = to_f64(self.atoms.get_forces()).reshape(-1)
-        return E, F_cart
+        E, F_cart = energy_forces_single(self.atoms.calc, self.atoms)
+        return E, to_f64(F_cart).reshape(-1)
 
     def _gradient_mw_from_forces(self, F_cart: np.ndarray) -> np.ndarray:
         """
@@ -680,7 +720,9 @@ class HPC:
                   sign: float,
                   q_ts_cart: np.ndarray,
                   v_neg_mw: np.ndarray,
-                  E_ts: float) -> Dict[str, any]:
+                  E_ts: float,
+                  H_cart_ts: np.ndarray,
+                  F_ts_cart: np.ndarray) -> Dict[str, any]:
         """
         Single-sided HPC IRC integration.
 
@@ -705,11 +747,10 @@ class HPC:
         q0_mw = q_ts_mw + self._scale_mw_step(v_dir, 0.5 * self._step_len_mw)
 
         # Gradient at TS (for initial Hessian update)
-        _, F_ts_cart = self._energy_forces_from_mw(q_ts_mw)
         g_ts_mw = self._gradient_mw_from_forces(F_ts_cart)
 
         # Initial Hessian at TS (MW)
-        H_ts_cart = self._get_hessian_cart()
+        H_ts_cart = H_cart_ts.copy()
         H0_mw = (self._D[:, None] * H_ts_cart) * self._D[None, :]
 
         # Initial energy / forces / gradient at displaced point
@@ -742,11 +783,14 @@ class HPC:
         records.append(
             {
                 "E": E0,
+                "forces": F0_cart.reshape(-1, 3).copy(),
                 "maxG": maxF0,
                 "rmsG": rmsF0,
                 "x": self.atoms.get_positions().copy(),
             }
         )
+
+        converged = False
 
         # Macro steps
         for it in range(1, p.max_steps + 1):
@@ -769,6 +813,7 @@ class HPC:
             records.append(
                 {
                     "E": E_new,
+                    "forces": F_new.reshape(-1, 3).copy(),
                     "maxG": maxF,
                     "rmsG": rmsF,
                     "x": self.atoms.get_positions().copy(),
@@ -777,10 +822,12 @@ class HPC:
 
             # Convergence in terms of Cartesian forces
             if (maxF <= p.f_max_th) and (rmsF <= p.f_rms_th):
+                converged = True
                 self._print_hurray()
                 break
 
-        return {"title": title, "records": records, "E_ts": E_ts}
+        return {"title": title, "records": records, "E_ts": E_ts,
+                "iterations": len(records) - 1, "converged": converged}
 
     # --------------------------- Merge & summary ----------------------------
     def _merge_and_mark_ts(self, f: Dict, b: Dict) -> Dict:
@@ -846,27 +893,29 @@ class HPC:
         bwd_path = base + "_backward" + ext
 
         # Forward
-        f_atoms, f_E = [], []
+        f_atoms, f_E, f_F = [], [], []
         for rec in f["records"]:
             a = self.atoms.copy()
             a.set_positions(rec["x"])
             f_atoms.append(a)
             f_E.append(rec["E"])
-        write_xyz(fwd_path, f_atoms, f_E)
+            f_F.append(rec["forces"])
+        write_xyz(fwd_path, f_atoms, f_E, forces=f_F)
 
         # Backward
-        b_atoms, b_E = [], []
+        b_atoms, b_E, b_F = [], [], []
         for rec in b["records"]:
             a = self.atoms.copy()
             a.set_positions(rec["x"])
             b_atoms.append(a)
             b_E.append(rec["E"])
-        write_xyz(bwd_path, b_atoms, b_E)
+            b_F.append(rec["forces"])
+        write_xyz(bwd_path, b_atoms, b_E, forces=b_F)
 
         # Full (concatenate forward then backward)
         full_atoms = f_atoms + b_atoms
         full_E = f_E + b_E
-        write_xyz(full_path, full_atoms, full_E)
+        write_xyz(full_path, full_atoms, full_E, forces=f_F + b_F)
 
         log_info(
             [

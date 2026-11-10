@@ -252,7 +252,13 @@ class InputReader():
 
         # Return Atoms if single structure, Molecules if multiple
         if isinstance(atoms_or_list, list):
-            return Molecules(atoms_or_list)
+            # Groups refer to the final post-processed objects, in file order.
+            offset = 0
+            input_groups = []
+            for size in self._input_group_sizes:
+                input_groups.append(atoms_or_list[offset:offset + size])
+                offset += size
+            return Molecules(atoms_or_list, input_groups=input_groups)
         else:
             return atoms_or_list
 
@@ -454,6 +460,7 @@ class InputReader():
                 raise ValueError("No coordinate groups found in the input.")
 
             atoms_list: List[Atoms] = []
+            self._input_group_sizes = []
             group_counter = 0
 
             # Get input file directory for resolving relative paths
@@ -483,6 +490,7 @@ class InputReader():
                     self.command_control.params["pdb"] = resolved
                     atoms = Atoms("H", positions=np.array([[0.0, 0.0, 0.0]], dtype=np.float64))
                     atoms_list.append(atoms)
+                    self._input_group_sizes.append(1)
 
                     group_counter += 1
                     info_message.append(f"\nGroup {group_counter} (PDB File)\n")
@@ -508,6 +516,7 @@ class InputReader():
                                 pdb_atoms.set_cell(Cell.fromcellpar(self.pbc))
 
                         atoms_list.extend(pdb_frames)
+                        self._input_group_sizes.append(len(pdb_frames))
                         group_counter += len(pdb_frames)
                         if isinstance(pdb_obj, Molecules):
                             info_message.append(f"\nLoaded {len(pdb_frames)} frames from PDB: {file_path}\n")
@@ -555,6 +564,7 @@ class InputReader():
 
                             # Add all frames from the trajectory to atoms_list
                             atoms_list.extend(molecules_obj.multiatoms)
+                            self._input_group_sizes.append(len(molecules_obj.multiatoms))
 
                             group_counter += len(molecules_obj.multiatoms)
                             info_message.append(f"\nLoaded {len(molecules_obj.multiatoms)} frames from trajectory: {file_path}\n")
@@ -562,25 +572,28 @@ class InputReader():
                                 info_message.append(f"PBC applied to trajectory: cell = [{self.pbc[0]:.3f}, {self.pbc[1]:.3f}, {self.pbc[2]:.3f}] Angstrom\n")
                             info_message.append('-' * 20 + '\n')
                         elif keyword == 'XYZ':
-                            # Regular XYZ file
+                            # One file may contain multiple complete structures.
                             atoms = XYZReader(file_path, base_dir=input_dir)
+                            xyz_atoms = atoms if isinstance(atoms, list) else [atoms]
+                            self._input_group_sizes.append(len(xyz_atoms))
 
-                            # Apply PBC if specified
-                            if self.pbc is not None:
-                                from ase.cell import Cell
-                                atoms.set_pbc([True, True, True])
-                                # PBC format: [a, b, c, alpha, beta, gamma]
-                                atoms.set_cell(Cell.fromcellpar(self.pbc))
+                            for atoms in xyz_atoms:
+                                # Apply PBC if specified.
+                                if self.pbc is not None:
+                                    from ase.cell import Cell
+                                    atoms.set_pbc([True, True, True])
+                                    # PBC format: [a, b, c, alpha, beta, gamma]
+                                    atoms.set_cell(Cell.fromcellpar(self.pbc))
 
-                            atoms_list.append(atoms)
+                                atoms_list.append(atoms)
 
-                            group_counter += 1
-                            info_message.append(f"\nGroup {group_counter} (from file: {file_path})\n")
-                            info_message.append('-' * 20 + '\n')
-                            syms = atoms.get_chemical_symbols()
-                            poss = atoms.get_positions()
-                            for i, (e, (x, y, z)) in enumerate(zip(syms, poss), start=1):
-                                info_message.append(f"{i:<4} {e:<2} {x:>20.6f} {y:>20.6f} {z:>20.6f}\n")
+                                group_counter += 1
+                                info_message.append(f"\nGroup {group_counter} (from file: {file_path})\n")
+                                info_message.append('-' * 20 + '\n')
+                                syms = atoms.get_chemical_symbols()
+                                poss = atoms.get_positions()
+                                for i, (e, (x, y, z)) in enumerate(zip(syms, poss), start=1):
+                                    info_message.append(f"{i:<4} {e:<2} {x:>20.6f} {y:>20.6f} {z:>20.6f}\n")
                     continue
 
                 # Case 2: mixed XYZ + inline in the same block -> force user to split
@@ -654,6 +667,7 @@ class InputReader():
                     atoms.set_cell(Cell.fromcellpar(self.pbc))
 
                 atoms_list.append(atoms)
+                self._input_group_sizes.append(1)
 
                 group_counter += 1
                 info_message.append(f"\nGroup {group_counter} (inline)\n")

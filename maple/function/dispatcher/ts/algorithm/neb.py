@@ -8,8 +8,8 @@ NEB implementation with:
 - ORCA-style dynamic spring constants
 """
 from __future__ import annotations
-from lib2to3.pgen2 import driver
 import os
+from contextlib import nullcontext
 import sys
 import math
 import copy
@@ -19,6 +19,8 @@ from typing import List, Tuple, Optional
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._inputs import _state
+from maple.function.calculator._batch import energy_forces_images
 
 from .logger import log_info
 from ...jobABC import JobABC
@@ -80,26 +82,48 @@ def kabsch_align(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, float, np.nd
     rmsd = float(np.sqrt((diff * diff).sum() / P.shape[0]))
     return Q_aligned, rmsd, R, t
 
-def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None):
+def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None, forces=None):
     """
     Write a multi-frame XYZ trajectory. If energies given, write in comment line.
     """
     if images and images[0].info.get("pdb_template"):
         write_pdb_trajectory(filename, images, energies=energies)
         return
-    with open(filename, "w") as f:
-        for i, at in enumerate(images):
-            pos = to_numpy_f64(at.get_positions())
-            symbols = at.get_chemical_symbols()
-            f.write(f"{len(symbols)}\n")
-            if energies is not None:
-                f.write(f"Image {i}  Energy = {energies[i]:.8f}\n")
-            else:
-                f.write(f"Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
-def write_all_images_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None, iteration: int = 0):
+    blocks = []
+    for i, at in enumerate(images):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [f"Image {i}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w")) as f:
+        f.writelines(blocks)
+        f.flush()
+
+def write_all_images_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None, iteration: int = 0, forces=None):
     """
     Append all current images to an xyz trajectory file (for NEB debug).
     Each block corresponds to one iteration of NEB optimization.
@@ -122,22 +146,39 @@ def write_all_images_xyz(filename: str, images: List[Atoms], energies: Optional[
                     remark=remark,
                 )
         return
-    with open(filename, "a") as f:
-        for i, at in enumerate(images):
-            pos = to_numpy_f64(at.get_positions())
-            symbols = at.get_chemical_symbols()
-            E = None if energies is None else energies[i]
-            f.write(f"{len(symbols)}\n")
-            if E is not None:
-                f.write(f"Iter {iteration} Image {i}  Energy = {E:.10f}\n")
-            else:
-                f.write(f"Iter {iteration} Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
+    blocks = []
+    for i, at in enumerate(images):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
 
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [f"Iter {iteration} Image {i}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
 
-
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "a")) as f:
+        f.writelines(blocks)
+        f.flush()
 
 
 # =============================================================================
@@ -180,15 +221,13 @@ def _idpp_targets(P0: np.ndarray, P1: np.ndarray, n_inner: int) -> List[np.ndarr
         targets.append(inv_tgt)
     return targets
 
-import numpy as np
-from ase import Atoms
-
 # =============================================================================
 # ------------------------------- NEB Core ------------------------------------
 # =============================================================================
 
 @dataclass
 class NEBParams:
+    batch_size: Optional[int] = None
     n_images: int = 10                     # total images excluding endpoints
     k_min: float = 0.03                    # minimum spring constant
     k_max: float = 0.3                     # maximum spring constant
@@ -372,7 +411,8 @@ def cineb_tangent(Rm1, R, Rp1, Em1, E, Ep1):
 def neb_forces(images: List[Atoms], energies: List[float], 
                k_spring: float = None, k_springs: List[float] = None,
                use_dynamic_k: bool = False, k_min: float = 0.03, 
-               k_max: float = 0.3, k_decay: float = 0.5) -> Tuple[List[np.ndarray], float, int]:
+               k_max: float = 0.3, k_decay: float = 0.5,
+               raw_forces=None) -> Tuple[List[np.ndarray], float, int]:
     """
     Compute NEB projected forces for internal images:
     F_NEB = F_true_perp + F_spring_parallel  (per image)
@@ -407,7 +447,8 @@ def neb_forces(images: List[Atoms], energies: List[float],
     hei_idx = 1
 
     # get raw forces and flatten
-    raw_forces = [to_numpy_f64(at.get_forces()) for at in images]
+    if raw_forces is None:
+        _, raw_forces = energy_forces_images(images)
     coords = [to_numpy_f64(at.get_positions()) for at in images]
     Es = [float(e) for e in energies]
 
@@ -683,7 +724,7 @@ class NEB(JobABC):
 
 
     def get_energies(self, imgs): 
-        return [float(at.get_potential_energy(force_consistent=True)) for at in imgs]
+        return energy_forces_images(imgs, self.params.batch_size)[0].tolist()
     
     def _compute_distances(self, images: List[Atoms]) -> List[float]:
         """
@@ -786,7 +827,7 @@ class NEB(JobABC):
         return new_images
     
     # ---------------- Climbing Image NEB (CINEB) -------------------------------
-    def cineb_forces(self, images: List[Atoms], energies: List[float], k_spring: float) -> Tuple[List[np.ndarray], float, int]:
+    def cineb_forces(self, images: List[Atoms], energies: List[float], k_spring: float, raw_forces=None) -> Tuple[List[np.ndarray], float, int]:
             """
             Climbing Image NEB projected forces:
             - normal NEB force for all non-endpoints except HEI
@@ -800,7 +841,8 @@ class NEB(JobABC):
             forces_proj = [None] * n_img
             max_fp = 0.0
 
-            raw_forces = [to_numpy_f64(at.get_forces()) for at in images]
+            if raw_forces is None:
+                _, raw_forces = energy_forces_images(images, self.params.batch_size)
             coords = [to_numpy_f64(at.get_positions()) for at in images]
             Es = [float(e) for e in energies]
 
@@ -864,8 +906,6 @@ class NEB(JobABC):
         - climbing image: use *true* forces F for convergence
         - climbing image index is frozen for the whole CINEB run
         """
-        if energies is None:
-            energies = [float(at.get_potential_energy(force_consistent=True)) for at in images]
 
         # reset any previous fixed HEI
         self._cineb_fixed_hei = None
@@ -879,11 +919,12 @@ class NEB(JobABC):
         driver.fmax_ci  = self.params.cineb_f_max_th
         driver.frms_ci  = self.params.cineb_f_rms_th
 
+        Es, raw_forces = None, None
         def eval_grad(x_flat: np.ndarray) -> np.ndarray:
-            """Return gradient dE/dx (flattened) for all internal images using CINEB forces."""
+            nonlocal Es, raw_forces
             self._unpack_internal(x_flat, images)
-            Es_local = [float(at.get_potential_energy(force_consistent=True)) for at in images]
-            Fp_list_local, _, _ = self.cineb_forces(images, Es_local, self.params.k_max)
+            Es, raw_forces = energy_forces_images(images, self.params.batch_size)
+            Fp_list_local, _, _ = self.cineb_forces(images, Es, self.params.k_max, raw_forces)
             grads = [(-Fp_list_local[i]).reshape(-1) for i in range(1, len(images) - 1)]
             return np.concatenate(grads) if grads else np.zeros_like(x_flat)
 
@@ -893,14 +934,13 @@ class NEB(JobABC):
         iteration = 0
 
         # initial energies / forces for logging & to freeze HEI
-        Es = [float(at.get_potential_energy(force_consistent=True)) for at in images]
-        Fp_list, maxfp, hei = self.cineb_forces(images, Es, self.params.k_max)
+        Fp_list, maxfp, hei = self.cineb_forces(images, Es, self.params.k_max, raw_forces)
 
         # freeze HEI index for the whole CINEB run
         self._cineb_fixed_hei = hei
 
 
-        F_CI_vec = to_numpy_f64(images[hei].get_forces())
+        F_CI_vec = raw_forces[hei]
         maxF_CI = float(np.max(np.linalg.norm(F_CI_vec, axis=1)))
         rmsF_CI = float(np.sqrt(np.mean(np.linalg.norm(F_CI_vec, axis=1) ** 2)))
 
@@ -923,10 +963,9 @@ class NEB(JobABC):
             Fp_all = np.concatenate(regular_flat) if regular_flat else np.zeros(0, dtype=np.float64)
 
             # true forces on CI (no projection)
-            F_CI = to_numpy_f64(images[hei].get_forces()).reshape(-1)
+            F_CI = raw_forces[hei].reshape(-1)
 
             if driver.ci_should_stop(Fp_all, F_CI):
-                log_info([f"\nCINEB converged after {iteration} iterations.\n"], self.output)
                 break
 
             # ===== L-BFGS step using CINEB gradient =====
@@ -946,22 +985,25 @@ class NEB(JobABC):
             g = g_new
 
             # ===== recompute energies / forces for next iteration & logging =====
-            Es = [float(at.get_potential_energy(force_consistent=True)) for at in images]
-            Fp_list, maxfp, _ = self.cineb_forces(images, Es, self.params.k_max)
+            Fp_list, maxfp, _ = self.cineb_forces(images, Es, self.params.k_max, raw_forces)
 
-            F_CI_vec = to_numpy_f64(images[hei].get_forces())
+            F_CI_vec = raw_forces[hei]
             maxF_CI = float(np.max(np.linalg.norm(F_CI_vec, axis=1)))
             rmsF_CI = float(np.sqrt(np.mean(np.linalg.norm(F_CI_vec, axis=1) ** 2)))
             rmsfp = rms_force(Fp_list)
             dE_CI = Es[hei] - Es[0]
 
-            write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration)
+            write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration, forces=raw_forces)
             log_info([f"   LBFGS {iteration:>4d} {hei:>6d} {dE_CI:>10.6f} "
                       f"{maxfp:>11.6f} {rmsfp:>10.6f} {maxF_CI:>10.6f} {rmsF_CI:>10.6f}\n"], self.output)
 
             iteration += 1
-        else:
-            log_info(["\nCINEB refinement reached maximum iterations.\n"], self.output)
+        regular_flat = [Fp_list[i].reshape(-1) for i in range(1, len(images) - 1) if i != hei]
+        Fp_all = np.concatenate(regular_flat) if regular_flat else np.zeros(0)
+        converged = driver.ci_should_stop(Fp_all, raw_forces[hei].reshape(-1))
+        message = (f"\nCINEB converged after {iteration} iterations.\n" if converged else
+                   "\nCINEB refinement reached maximum iterations.\n")
+        log_info([message], self.output)
 
         # Clean up fixed HEI
         self._cineb_fixed_hei = None
@@ -970,8 +1012,8 @@ class NEB(JobABC):
         base, _ = os.path.splitext(self.output)
         cineb_mep = base + "_cineb_mep" + ext
         cineb_hei = base + "_cineb_hei" + ext
-        write_xyz(cineb_mep, images, energies=Es)
-        write_xyz(cineb_hei, [images[hei]], energies=[Es[hei]])
+        write_xyz(cineb_mep, images, energies=Es, forces=raw_forces)
+        write_xyz(cineb_hei, [images[hei]], energies=[Es[hei]], forces=[raw_forces[hei]])
 
         log_info([
             "\n---------------------------------------------------------------\n",
@@ -1001,18 +1043,20 @@ class NEB(JobABC):
             prfo = PRFO(output=self.output, atoms=ts_guess)
             ts_opt = prfo.run()
 
-            E_TS = ts_opt.get_potential_energy(force_consistent=True)
-            maxF_TS = np.max(np.linalg.norm(ts_opt.get_forces(), axis=1))
-            rmsF_TS = np.sqrt(np.mean(np.linalg.norm(ts_opt.get_forces(), axis=1) ** 2))
+            E_TS, F_TS = prfo.results["energy"], prfo.results["forces"]
+            maxF_TS = np.max(np.linalg.norm(F_TS, axis=1))
+            rmsF_TS = np.sqrt(np.mean(np.linalg.norm(F_TS, axis=1) ** 2))
 
             # Insert TS right after CI
             images.insert(hei + 1, ts_opt)
+            Es = list(Es)
             Es.insert(hei + 1, E_TS)
+            raw_forces.insert(hei + 1, F_TS)
 
             nebts_mep = base + "_nebts_mep" + ext
             nebts_ts = base + "_nebts_ts" + ext
-            write_xyz(nebts_mep, images, energies=Es)
-            write_xyz(nebts_ts, [ts_opt], energies=[E_TS])
+            write_xyz(nebts_mep, images, energies=Es, forces=raw_forces)
+            write_xyz(nebts_ts, [ts_opt], energies=[E_TS], forces=[F_TS])
 
             log_info([
                 "\n---------------------------------------------------------------\n",
@@ -1027,8 +1071,8 @@ class NEB(JobABC):
                 dE = (E - Es[0]) * kcal_per_Eh
                 label = " TS" if i == hei + 1 else f"{i:3d}"
                 marker = " <= TS" if i == hei + 1 else (" <= CI" if i == hei else "")
-                maxF = np.max(np.linalg.norm(images[i].get_forces(), axis=1))
-                rmsF = np.sqrt(np.mean(np.linalg.norm(images[i].get_forces(), axis=1) ** 2))
+                maxF = np.max(np.linalg.norm(raw_forces[i], axis=1))
+                rmsF = np.sqrt(np.mean(np.linalg.norm(raw_forces[i], axis=1) ** 2))
                 log_info([
                     f"{label:>4s} {E:12.5f} {dE:11.2f} {maxF:11.5f} {rmsF:10.5f}{marker}\n"
                 ], self.output)
@@ -1046,6 +1090,10 @@ class NEB(JobABC):
             ], self.output)
 
 
+
+        self.results = {'images': images, 'energy': np.asarray(Es), 'forces': raw_forces,
+                        'iterations': iteration, 'converged': converged}
+        return images
 
     # ==============================================================
     # IDPP smoothing for initial path
@@ -1311,16 +1359,15 @@ class NEB(JobABC):
         # ===================================================================
         # Step 2: Endpoint properties and alignment
         # ===================================================================
-        def forces_info(atoms):
-            F = atoms.get_forces()
+        def forces_info(F):
             maxF = np.max(np.linalg.norm(F, axis=1))            
             rmsF = np.sqrt(np.mean(np.linalg.norm(F, axis=1) ** 2))
             return maxF, rmsF
 
-        E_R = images[0].get_potential_energy(force_consistent=True)
-        E_P = images[-1].get_potential_energy(force_consistent=True)
-        maxF_R, rmsF_R = forces_info(images[0])
-        maxF_P, rmsF_P = forces_info(images[-1])
+        endpoint_E, endpoint_F = energy_forces_images([images[0], images[-1]], self.params.batch_size)
+        E_R, E_P = endpoint_E
+        maxF_R, rmsF_R = forces_info(endpoint_F[0])
+        maxF_P, rmsF_P = forces_info(endpoint_F[1])
 
         log_info([
             "\nProperties of fixed NEB end points:\n",
@@ -1364,28 +1411,23 @@ class NEB(JobABC):
         
         self._k_springs_history = []
         
+        Es, raw_forces = None, None
         def eval_grad(x_flat):
+            nonlocal Es, raw_forces
             self._unpack_internal(x_flat, images)
-            Es = self.get_energies(images)
-            
+            Es, raw_forces = energy_forces_images(images, self.params.batch_size)
             Fp_list, _, _ = neb_forces(
-                images, Es,
-                k_spring=None,
-                k_springs=None,
-                use_dynamic_k=self.params.use_dynamic_k,
-                k_min=self.params.k_min,
-                k_max=self.params.k_max,
-                k_decay=self.params.k_decay
+                images, Es, use_dynamic_k=self.params.use_dynamic_k,
+                k_min=self.params.k_min, k_max=self.params.k_max,
+                k_decay=self.params.k_decay, raw_forces=raw_forces,
             )
-            
             grads = [(-Fp_list[i]).reshape(-1) for i in range(1, len(images) - 1)]
             return np.concatenate(grads) if grads else np.zeros_like(x_flat)
-        
+
         x = self._pack_internal(images)
         g = eval_grad(x)
         iteration = 0
         
-        Es = self.get_energies(images)
         
         if self.params.use_dynamic_k:
             k_springs = compute_dynamic_k(Es, self.params.k_min, self.params.k_max, self.params.k_decay)
@@ -1397,7 +1439,7 @@ class NEB(JobABC):
             images, Es,
             k_spring=None,
             k_springs=k_springs,
-            use_dynamic_k=False
+            use_dynamic_k=False, raw_forces=raw_forces
         )
         rmsfp = rms_force(Fp_list)
         dE_hei = Es[hei] - Es[0]
@@ -1422,7 +1464,7 @@ class NEB(JobABC):
             ], self.output)
         
         # Write initial trajectory
-        write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration)
+        write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration, forces=raw_forces)
         
         # ===== Main optimization loop =====
         while iteration < self.params.max_iter and not driver.should_stop(g, self.params.neb_f_max_th, self.params.neb_f_rms_th):
@@ -1440,9 +1482,8 @@ class NEB(JobABC):
             x = x_new
             g = g_new
             
-            # Compute forces and energies for logging
-            Es = self.get_energies(images)
-            
+            # Reuse the current evaluation for logging.
+
             if self.params.use_dynamic_k:
                 k_springs = compute_dynamic_k(Es, self.params.k_min, self.params.k_max, self.params.k_decay)
                 self._k_springs_history.append(k_springs.copy())
@@ -1453,13 +1494,13 @@ class NEB(JobABC):
                 images, Es,
                 k_spring=None,
                 k_springs=k_springs,
-                use_dynamic_k=False
+                use_dynamic_k=False, raw_forces=raw_forces
             )
             
             rmsfp = rms_force(Fp_list)
             dE_hei = Es[hei] - Es[0]
             
-            write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration)
+            write_all_images_xyz(traj_file, images, energies=Es, iteration=iteration, forces=raw_forces)
             
             if self.params.use_dynamic_k:
                 k_hei = k_springs[hei]
@@ -1467,7 +1508,7 @@ class NEB(JobABC):
             else:
                 log_info([f"   LBFGS {iteration:>4d} {hei:>6d} {dE_hei:>10.6f} {maxfp:>11.6f} {rmsfp:>10.6f}\n"], self.output)
         
-        if iteration == 0:
+        if iteration == 0 and driver.should_stop(g, self.params.neb_f_max_th, self.params.neb_f_rms_th):
             log_info(["\nNEB already converged at initial geometry (iteration 0).\n"], self.output)
         elif iteration == self.params.max_iter:
             log_info(["\nNEB optimization reached maximum iterations.\n"], self.output)
@@ -1481,8 +1522,8 @@ class NEB(JobABC):
         base, _ = os.path.splitext(self.output)
         mep_path = base + "_mep" + ext
         hip_path = base + "_hei" + ext
-        write_xyz(mep_path, images, energies=Es)
-        write_xyz(hip_path, [images[hei]], energies=[Es[hei]])
+        write_xyz(mep_path, images, energies=Es, forces=raw_forces)
+        write_xyz(hip_path, [images[hei]], energies=[Es[hei]], forces=[raw_forces[hei]])
 
         # Compute straight-line distances
         distances = [np.linalg.norm(images[i+1].get_positions() - images[i].get_positions()) for i in range(len(images)-1)]
@@ -1529,6 +1570,10 @@ class NEB(JobABC):
         ], self.output)
         
         
+        self.results = {'images': images, 'energy': np.asarray(Es), 'forces': raw_forces,
+                        'iterations': iteration,
+                        'converged': driver.should_stop(g, self.params.neb_f_max_th, self.params.neb_f_rms_th)}
+
         # 3) Optional: CINEB refinement
         if self.params.refine == 'cineb' or self.params.refine == 'nebts':
             if iteration == self.params.max_iter:
@@ -1538,3 +1583,5 @@ class NEB(JobABC):
                 ], self.output)
             else:
                 self.restart_run(images, energies=Es)
+
+        return images

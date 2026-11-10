@@ -196,7 +196,7 @@ def _format_atomtypes_lines(paramset: RefinementParameterSet, atoms: Atoms, meta
         sigma_nm = (2.0 * float(nonbond.rmin_half) / _SIGMA_DENOM) * _ANG_TO_NM
         epsilon_kj = float(nonbond.epsilon) * _KCAL_TO_KJ
         lines.append(
-            f"{nonbond.atom_type:<12}{atomic_number:>5d}  {mass:>10.6f}  0.00000000  A  "
+            f"{nonbond.atom_type:<12} {atomic_number:>5d}  {mass:>10.6f}  0.00000000  A  "
             f"{sigma_nm:>12.8f}  {epsilon_kj:>12.7f}\n"
         )
     return lines
@@ -228,7 +228,7 @@ def _format_bonds_lines(paramset: RefinementParameterSet, meta: dict) -> list[st
             continue
         r0_nm = float(bond.rEq) * _ANG_TO_NM
         k_gmx = 2.0 * float(bond.kBond) * _KCAL_TO_KJ * 100.0
-        lines.append(f"{bond.atoms[0]:>6d}{bond.atoms[1]:>7d}{1:>6d}{r0_nm:>12.5f}{k_gmx:>14.6f}\n")
+        lines.append(f"{bond.atoms[0]:>6d} {bond.atoms[1]:>7d} {1:>6d} {r0_nm:>12.5f} {k_gmx:>14.6f}\n")
     return lines
 
 
@@ -236,7 +236,7 @@ def _format_pairs_lines(paramset: RefinementParameterSet) -> list[str]:
     cache = build_mm_topology_cache(paramset)
     lines = [_comment("ai     aj funct")]
     for atom_i, atom_j in sorted(cache.scaled_14):
-        lines.append(f"{atom_i:>6d}{atom_j:>7d}{1:>6d}\n")
+        lines.append(f"{atom_i:>6d} {atom_j:>7d} {1:>6d}\n")
     return lines
 
 
@@ -252,8 +252,8 @@ def _format_angles_lines(paramset: RefinementParameterSet, meta: dict) -> list[s
         theta_deg = degrees(float(angle.thetaEq))
         k_gmx = 2.0 * float(angle.kTheta) * _KCAL_TO_KJ
         lines.append(
-            f"{angle.atoms[0]:>6d}{angle.atoms[1]:>7d}{angle.atoms[2]:>7d}{1:>6d}"
-            f"{theta_deg:>12.6f}{k_gmx:>14.6f}\n"
+            f"{angle.atoms[0]:>6d} {angle.atoms[1]:>7d} {angle.atoms[2]:>7d} {1:>6d} "
+            f"{theta_deg:>12.6f} {k_gmx:>14.6f}\n"
         )
     return lines
 
@@ -277,8 +277,8 @@ def _format_dihedrals_lines(paramset: RefinementParameterSet, meta: dict) -> lis
             continue
         for term in dihedral.terms:
             lines.append(
-                f"{dihedral.atoms[0]:>6d}{dihedral.atoms[1]:>7d}{dihedral.atoms[2]:>7d}{dihedral.atoms[3]:>7d}{1:>6d}"
-                f"{degrees(float(term.phase)):>12.7f}{(float(term.kPhi) * _KCAL_TO_KJ):>12.7f}"
+                f"{dihedral.atoms[0]:>6d} {dihedral.atoms[1]:>7d} {dihedral.atoms[2]:>7d} {dihedral.atoms[3]:>7d} {1:>6d} "
+                f"{degrees(float(term.phase)):>12.7f} {(float(term.kPhi) * _KCAL_TO_KJ):>12.7f} "
                 f"{_period_to_mult(term.period, f'proper dihedral {dihedral.atoms}', meta):>5d}\n"
             )
     for improper in paramset.impropers:
@@ -287,8 +287,8 @@ def _format_dihedrals_lines(paramset: RefinementParameterSet, meta: dict) -> lis
             continue
         for term in improper.terms:
             lines.append(
-                f"{improper.atoms[0]:>6d}{improper.atoms[1]:>7d}{improper.atoms[2]:>7d}{improper.atoms[3]:>7d}{4:>6d}"
-                f"{degrees(float(term.phase)):>12.7f}{(float(term.kPhi) * _KCAL_TO_KJ):>12.7f}"
+                f"{improper.atoms[0]:>6d} {improper.atoms[1]:>7d} {improper.atoms[2]:>7d} {improper.atoms[3]:>7d} {4:>6d} "
+                f"{degrees(float(term.phase)):>12.7f} {(float(term.kPhi) * _KCAL_TO_KJ):>12.7f} "
                 f"{_period_to_mult(term.period, f'improper {improper.atoms}', meta):>5d}\n"
             )
     return lines

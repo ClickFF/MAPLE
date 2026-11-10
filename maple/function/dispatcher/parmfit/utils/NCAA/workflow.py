@@ -151,6 +151,7 @@ def _prepare_ncaa_models(
         chirality=identity.chirality,
         source_atoms=source_atoms,
         output_base=work_prefix,
+        batch_size=config.batch_size,
         max_iter=config.opt_max_iter,
         max_step=config.opt_max_step,
     )
@@ -304,6 +305,7 @@ def _refine_ncaa_parameters(
                 "paramset": stage0_result,
                 "params": torsion_params,
                 "runtime": TorsionScanRuntime(
+                    batch_size=config.batch_size,
                     max_iter=config.opt_max_iter,
                     memory=int(max(config.qm.qm_mem, 1)),
                     curvature=0.6,

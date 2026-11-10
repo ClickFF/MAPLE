@@ -1,14 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 BatchPRFO with fixed padded dimension nmax.
-All EFH are padded to nmax determined from FIRST prepare/get_ef_gpu.
-Calculator.prepare() is called with fixed_nmax afterwards.
-
-FIXES:
-1. Bofill update now happens after EVERY accepted step (not just non-recalc)
-2. Gradient consistency: use same gradient source throughout iteration
-3. Increased SR1 tolerance from 1e-10 to 1e-8
-4. Better step acceptance tracking
+Calculator results are padded by the optimizer to its initial nmax.
 """
 
 from typing import List, Optional
@@ -16,16 +9,13 @@ import os
 import numpy as np
 import torch
 from ase import Atoms
+from .PRFO import PRFO, write_xyz, append_xyz_trajectory
+from ...optimization.algorithm._common import (
+    batch_tensors, batch_results, store_batch_results, member_outputs, compute_metrics,
+)
 
 DTYPE = torch.float64
 BIG = 1e8
-
-
-def _ptr_from_atoms(at_list, device):
-    ptr = [0]
-    for at in at_list:
-        ptr.append(ptr[-1] + len(at))
-    return torch.tensor(ptr, dtype=torch.long, device=device)
 
 
 def _masses_flat(at_list, nmax, device):
@@ -36,17 +26,6 @@ def _masses_flat(at_list, nmax, device):
         mass[b, :3 * len(at)] = torch.from_numpy(np.repeat(m, 3)).to(device=device, dtype=DTYPE)
     return mass
 
-
-def _symbols_flat(at_list):
-    return [at.get_chemical_symbols() for at in at_list]
-
-
-def _get_coord_gpu(calc) -> torch.Tensor:
-    if hasattr(calc, "coord"):
-        return calc.coord
-    elif hasattr(calc, "coord32"):
-        return calc.coord32
-    raise AttributeError("calculator has no coord buffer")
 
 
 class BatchPRFO:
@@ -65,8 +44,16 @@ class BatchPRFO:
                  max_outer_iter: int = 256,
                  device: str = "cuda",
                  recalc: int = 4,
-                 hessian_update: str = "bofill"):
+                 hessian_update: str = "bofill",
+                 batch_size: Optional[int] = None,
+                 evals_eps: float = 1e-10,
+                 mu_margin: float = 1e-8,
+                 max_bisect_it: int = 60):
         self.trust_init = trust_init
+        self.batch_size = batch_size
+        self.evals_eps = evals_eps
+        self.mu_margin = mu_margin
+        self.max_bisect_it = max_bisect_it
         self.trust_min = trust_min
         self.trust_max = trust_max
         self.eta_shrink = eta_shrink
@@ -90,11 +77,9 @@ class BatchPRFO:
         self.tracked_mode_vec_mw = None
         self.tracked_mode_idx = None
 
-        self._ptr = None
         self._L_vec = None
         self._nmax = 0
         self._B = 0
-        self._symbols_per_batch = None
         self._arange_n = None
         self._real_mask = None
         self._D = None
@@ -102,186 +87,92 @@ class BatchPRFO:
         self._orig_index = None
         self._H_work = None
         self._g_cart_prev = None
-        self._recent_acceptance_rate = 0.0
-        self._enable_vectorized_mu = False
 
 
     # ===================================================
     # PUBLIC RUN
     # ===================================================
-    @profile
-    def run(self, mols) -> None:
+    def run(self, mols) -> List[Atoms]:
         device = self.device
-        atoms_list = list(mols.multiatoms)
-        calc = mols.calc
-
+        all_atoms = list(mols.multiatoms)
+        atoms_list = all_atoms.copy()
+        calc = atoms_list[0].calc
         B0 = len(atoms_list)
-        if B0 == 0:
-            return
-
+        self.results = batch_results(all_atoms)
         self._orig_index = torch.arange(B0, dtype=torch.long, device=device)
-
-        self._open_log()
-        self._w("# RS-PRFO batched TS search start\n")
-        self._w(f"# RecalcFC interval: {self.recalc}\n")
-        self._w(f"# Hessian update method: {self.hessian_update}\n")
-
-        self._init_xyz_paths(B0)
-        self._symbols_per_batch = _symbols_flat(atoms_list)
-
-        # === First prepare to fix nmax ===
-        calc.prepare(atoms_list)
-        _, F0 = calc.get_ef_gpu()
-        self._nmax = int(F0.shape[1])
+        self._nmax = 3 * max(len(at) for at in atoms_list)
         self._arange_n = torch.arange(self._nmax, device=device)
-
-        # Build topology (nmax fixed)
         self._rebuild_topology(atoms_list)
-        self._dump_xyz_all(calc, atoms_list, tag="init")
-
-        B = self._B
-        trust_r = torch.full((B,), self.trust_init, dtype=DTYPE, device=device)
-        last_step = torch.zeros((B, self._nmax), dtype=DTYPE, device=device)
-
-        self.tracked_mode_vec_mw = None
-        self.tracked_mode_idx = None
-
-        outer_it = 0
-        self._H_work = None
-        self._g_cart_prev = None
-
-        while outer_it < self.max_outer_iter and len(atoms_list) > 0:
-            outer_it += 1
-            real_mask = self._real_mask
-
-            calc.backup_coords()
-
-            # Decide whether to rebuild Hessian from calculator (Gaussian RecalcFC-like)
-            need_recalc = (outer_it == 1) or ((outer_it - 1) % self.recalc == 0)
-
-            if need_recalc:
-                # Pull EFH (true or numerical) from calculator; pad to nmax
-                E_old, F_tmp, H_tmp, _ = calc.get_efh_gpu()
-                E_old = E_old.to(dtype=DTYPE)
-                F_tmp = F_tmp.to(dtype=DTYPE)
-                H_tmp = 0.5 * (H_tmp + H_tmp.transpose(-1, -2)).to(dtype=DTYPE)
-
-                # pad to nmax if needed
-                Bcur, Lcur = F_tmp.shape
-                if Lcur != self._nmax:
-                    H_pad = torch.zeros((Bcur, self._nmax, self._nmax), dtype=DTYPE, device=H_tmp.device)
-                    H_pad[:, :Lcur, :Lcur] = H_tmp
-                    H_use = H_pad
-                    F_use = torch.zeros((Bcur, self._nmax), dtype=DTYPE, device=F_tmp.device)
-                    F_use[:, :Lcur] = F_tmp
+        self._init_xyz_paths(all_atoms)
+        self.tracked_mode_vec_mw = self.tracked_mode_idx = None
+        self._open_log()
+        try:
+            self._w("# RS-PRFO batched TS search start\n")
+            E_old, F_old, H_old = self._compute_efh(calc, atoms_list)
+            store_batch_results(self.results, self._orig_index, atoms_list,
+                                E_old, F_old, 0, torch.zeros(B0, dtype=torch.bool, device=device))
+            self._dump_xyz_all(atoms_list, E_old, F_old)
+            trust_r = torch.full((B0,), self.trust_init, dtype=DTYPE, device=device)
+            last_step = torch.zeros((B0, self._nmax), dtype=DTYPE, device=device)
+            outer_it = 0
+            while outer_it < self.max_outer_iter and len(atoms_list) > 0:
+                outer_it += 1
+                real_mask = self._real_mask
+                last_step.zero_()
+                need_recalc = (outer_it == 1) or ((outer_it - 1) % self.recalc == 0)
+                if need_recalc:
+                    if outer_it > 1:
+                        E_old, F_old, H_old = self._compute_efh(calc, atoms_list)
+                    H_cart, g_cart = self._build_cartesian_hg(F_old, H_old, real_mask)
+                    self._H_work = H_cart.clone()
                 else:
-                    H_use = H_tmp
-                    F_use = F_tmp
-
-                # Build Cartesian H and g
-                H_cart, g_cart = self._build_cartesian_hg(F_use, H_use, real_mask)
-
-                # Store exact Hessian and gradient
-                self._H_work = H_cart.clone()
+                    H_cart = self._H_work
+                    g_cart = -F_old * real_mask.to(DTYPE)
                 self._g_cart_prev = g_cart.clone()
-                
-                self._w(f"[Iter {outer_it}] Recalculated exact Hessian\n")
-
-            else:
-                # Non-recalc step: use working Hessian; get current EF
-                E_old, F_now = calc.get_ef_gpu()
-                E_old = E_old.to(dtype=DTYPE)
-                F_now = F_now.to(dtype=DTYPE)
-                
-                # Use working Hessian, compute current gradient
-                H_cart = self._H_work
-                g_cart = -F_now * real_mask.to(DTYPE)
-
-            # Mass-weighting and eigen-decomposition
-            H_mw, g_mw = self._mass_weight_hg(H_cart, g_cart, real_mask)
-            w, V, gp = self._eigh_and_track_modes(H_mw, g_mw)
-
-            # Inner RS-PRFO loop
-            trust_r, last_step, last_rho, step_accepted = self._inner_rs_prfo_loop(
-                it=outer_it,
-                calc=calc,
-                w=w, V=V, gp=gp,
-                H=H_cart, g_cart=g_cart,
-                trust_r=trust_r,
-                last_step=last_step,
-                real_mask=real_mask,
-                E_old=E_old,
-            )
-
-            # After step: get new gradient
-            E_fin, F_fin = calc.get_ef_gpu()
-            F_fin = F_fin.to(dtype=DTYPE)
-            g_new_cart = -F_fin * real_mask.to(DTYPE)
-
-            # Bofill update: apply ONLY if we didn't just recalculate AND at least one step was accepted
-            if not need_recalc and step_accepted.any():
-                self._w(
-                    f"[Iter {outer_it}] Applying {self.hessian_update.upper()} "
-                    f"update to {step_accepted.sum().item()} batches\n"
-                )
-                update_fn = (
-                    self._bfgs_update_batched
-                    if self.hessian_update == "bfgs"
-                    else self._bofill_update_batched
-                )
-                self._H_work = update_fn(
-                    H=self._H_work,
-                    s_cart=last_step,
-                    g_prev=self._g_cart_prev,
-                    g_new=g_new_cart,
-                    real_mask=real_mask,
-                    step_accepted=step_accepted
-                )
-            
-            # Always update gradient buffer for next iteration
-            self._g_cart_prev = g_new_cart.clone()
-
-            # Convergence check
-            done = self._check_convergence(
-                it=outer_it,
-                calc=calc,
-                atoms_list=atoms_list,
-                trust_r=trust_r,
-                last_step=last_step,
-                real_mask=real_mask,
-                last_rho=last_rho,
-            )
-
-            # Dynamic batch shrinking
-            survive_local = (~done).nonzero(as_tuple=False).flatten()
-            if survive_local.numel() < len(done):
-                self._sync_atoms_from_calc(calc, atoms_list)
-
-                atoms_list = [atoms_list[i] for i in survive_local.cpu().tolist()]
-                self._orig_index = self._orig_index[survive_local]
-
-                trust_r = trust_r[survive_local]
-                last_step = last_step[survive_local]
-
-                if self.tracked_mode_idx is not None:
+                H_mw, g_mw = self._mass_weight_hg(H_cart, g_cart, real_mask)
+                w, V, gp = self._eigh_and_track_modes(H_mw, g_mw)
+                self._last_ef = (E_old.clone(), F_old.clone())
+                trust_r, last_step, last_rho, step_accepted = self._inner_rs_prfo_loop(
+                    outer_it, calc, atoms_list, w, V, gp, H_cart, g_cart,
+                    trust_r, last_step, real_mask, E_old)
+                E_fin, F_fin = self._last_ef
+                g_new_cart = -F_fin * real_mask.to(DTYPE)
+                if not need_recalc and step_accepted.any():
+                    update_fn = (self._bfgs_update_batched if self.hessian_update == 'bfgs'
+                                 else self._bofill_update_batched)
+                    self._H_work = update_fn(self._H_work, last_step, self._g_cart_prev,
+                                             g_new_cart, real_mask, step_accepted)
+                done = self._check_convergence(outer_it, E_fin, F_fin, atoms_list,
+                                               trust_r, last_step, real_mask, last_rho)
+                done &= step_accepted
+                store_batch_results(self.results, self._orig_index, atoms_list,
+                                    E_fin, F_fin, outer_it, done)
+                survive_local = (~done).nonzero(as_tuple=False).flatten()
+                if survive_local.numel() < len(atoms_list):
+                    atoms_list = [atoms_list[i] for i in survive_local.cpu().tolist()]
+                    self._orig_index = self._orig_index[survive_local]
+                    trust_r, last_step = trust_r[survive_local], last_step[survive_local]
                     self.tracked_mode_idx = self.tracked_mode_idx[survive_local]
-                if self.tracked_mode_vec_mw is not None:
                     self.tracked_mode_vec_mw = self.tracked_mode_vec_mw[survive_local]
-
-                calc.prepare(atoms_list, fixed_nmax=self._nmax)
-                self._rebuild_topology(atoms_list)
-
-                # Slice working buffers
-                if self._H_work is not None:
                     self._H_work = self._H_work[survive_local]
-                if self._g_cart_prev is not None:
-                    self._g_cart_prev = self._g_cart_prev[survive_local]
+                    self._rebuild_topology(atoms_list)
+                E_old, F_old = E_fin[survive_local], F_fin[survive_local]
 
-        else:
-            self._w("# Maximum iterations reached.\n")
+            for idx_orig, atoms in enumerate(all_atoms):
+                energy, forces = self.results['energy'][idx_orig], self.results['forces'][idx_orig]
+                iterations = self.results['iterations'][idx_orig]
+                write_xyz(self.ts_paths[idx_orig], atoms, energy=energy,
+                          iteration=iterations, forces=forces)
+                status = 'converged' if self.results['converged'][idx_orig] else 'NOT converged'
+                text = f"PRFO {status} after {iterations} iterations. Energy = {energy:.10f} Hartree\n"
+                self._loggers[idx_orig].log_info([text])
+                self._w(f"Member {idx_orig + 1}: {text}")
+            return all_atoms
+        finally:
+            self._close_log()
 
-        self._close_log()
-
+    def _get_ef(self, calc, atoms_list):
+        return batch_tensors(calc, atoms_list, self._nmax, self.device, self.batch_size)
 
     # ===================================================
     # TOPOLOGY
@@ -292,7 +183,6 @@ class BatchPRFO:
         B = len(atoms_list)
         self._B = B
 
-        self._ptr = _ptr_from_atoms(atoms_list, device)
         L_list = [3 * len(at) for at in atoms_list]
         self._L_vec = torch.tensor(L_list, dtype=torch.int64, device=device)
 
@@ -301,41 +191,10 @@ class BatchPRFO:
         mass = _masses_flat(atoms_list, self._nmax, device)
         self._D = 1.0 / torch.sqrt(torch.clamp(mass, min=1e-12))
 
-    def _sync_atoms_from_calc(self, calc, atoms_list):
-        with torch.no_grad():
-            pos = _get_coord_gpu(calc).detach().cpu().numpy()
-        ptr = self._ptr.detach().cpu().numpy()
-        for i, at in enumerate(atoms_list):
-            s, t = ptr[i], ptr[i+1]
-            at.positions[:] = pos[s:t]
-
-    # ===================================================
-    # EFH with padding to fixed nmax
-    # ===================================================
-
-    @profile
-    def _compute_efh(self, calc):
-        """
-        EFH must be padded to the fixed nmax from the first iteration.
-        """
-        E_old, F_raw, H_raw, _ = calc.get_efh_gpu()
-
-        F_raw = F_raw.to(dtype=DTYPE)
-        H_raw = 0.5 * (H_raw + H_raw.transpose(-1, -2)).to(dtype=DTYPE)
-
-        nmax = int(self._nmax)
-        B, L = F_raw.shape
-
-        if L != nmax:
-            F_pad = torch.zeros((B, nmax), dtype=DTYPE, device=F_raw.device)
-            F_pad[:, :L] = F_raw
-            F_raw = F_pad
-
-            H_pad = torch.zeros((B, nmax, nmax), dtype=DTYPE, device=H_raw.device)
-            H_pad[:, :L, :L] = H_raw
-            H_raw = H_pad
-
-        return E_old.to(dtype=DTYPE), F_raw, H_raw
+    def _compute_efh(self, calc, atoms_list):
+        E, F, H = batch_tensors(calc, atoms_list, self._nmax, self.device,
+                                 self.batch_size, hessian=True)
+        return E, F, .5 * (H + H.transpose(-1, -2))
 
     def _build_cartesian_hg(self, F_raw, H_raw, real_mask):
         mask_ij = (real_mask.unsqueeze(-1) & real_mask.unsqueeze(-2)).to(DTYPE)
@@ -369,8 +228,8 @@ class BatchPRFO:
         w, V = torch.linalg.eigh(H_mw)
         gp = (V.transpose(-1, -2) @ g_mw.unsqueeze(-1)).squeeze(-1)
 
-        tiny = w.abs() < 1e-10
-        w = torch.where(tiny, torch.sign(w) * 1e-10, w)
+        tiny = w.abs() < self.evals_eps
+        w = torch.where(tiny, torch.where(w < 0, -self.evals_eps, self.evals_eps), w)
 
         if self.tracked_mode_vec_mw is None:
             neg_idx = torch.argmin(w, dim=1)
@@ -379,9 +238,7 @@ class BatchPRFO:
             tracked_idx = torch.where(has_neg, neg_idx, alt_idx)
 
             self.tracked_mode_idx = tracked_idx
-            self.tracked_mode_vec_mw = torch.stack(
-                [V[b, :, tracked_idx[b]] for b in range(B)], dim=0
-            )
+            self.tracked_mode_vec_mw = V.transpose(1, 2)[torch.arange(B, device=V.device), tracked_idx]
 
         else:
             overlap = torch.matmul(
@@ -394,21 +251,16 @@ class BatchPRFO:
             signs = torch.where(signs == 0, torch.ones_like(signs), signs)
 
             self.tracked_mode_idx = idx
-            self.tracked_mode_vec_mw = torch.stack(
-                [V[b, :, idx[b]] * signs[b] for b in range(B)], dim=0
-            )
+            self.tracked_mode_vec_mw = V.transpose(1, 2)[torch.arange(B, device=V.device), idx] * signs[:, None]
 
         return w, V, gp
 
     # ===================================================
     # INNER RS-PRFO LOOP
     # ===================================================
-    @profile
-    def _inner_rs_prfo_loop(self, it, calc, w, V, gp, H, g_cart,
+    def _inner_rs_prfo_loop(self, it, calc, atoms_list, w, V, gp, H, g_cart,
                             trust_r, last_step, real_mask, E_old):
-        """
-        Optimized inner loop with ~1.5-2x speedup.
-        """
+        """Try pending members and retain each accepted geometry and E/F."""
         device = self.device
         B, n = gp.shape
 
@@ -420,12 +272,9 @@ class BatchPRFO:
         step_accepted = torch.zeros(B, dtype=torch.bool, device=device)
         last_rho = torch.full((B,), float("nan"), dtype=DTYPE, device=device)
 
-        # === OPTIMIZATION #4: Adaptive max attempts ===
-        if self._recent_acceptance_rate > 0.7 and it > 5:
-            max_attempts = max(10, self.max_inner_attempts // 2)
-        else:
-            max_attempts = self.max_inner_attempts
+        max_attempts = self.max_inner_attempts
 
+        r_old = [at.get_positions() for at in atoms_list]
         attempts_used = 0
         for _try in range(max_attempts):
             attempts_used = _try + 1
@@ -459,26 +308,20 @@ class BatchPRFO:
             ).clamp(0.05, 0.95)
 
             R2 = trust_r ** 2
+            within_radius = total_unc <= R2
+            constrained = pend & ~within_radius
             R2_minus = alpha * R2
             R2_plus  = (1.0 - alpha) * R2
 
-            # === Choose μ solver ===
-            if self._enable_vectorized_mu:
-                mu_minus, s_part_minus = self._solve_mu_vectorized(
-                    w, gp, minus_mask, R2_minus, sigma=-1, only=pend
-                )
-                mu_plus, s_part_plus = self._solve_mu_vectorized(
-                    w, gp, plus_mask, R2_plus, sigma=+1, only=pend
-                )
-            else:
-                mu_minus, s_part_minus = self._solve_mu_batched(
-                    w, gp, minus_mask, R2_minus, sigma=-1, only=pend
-                )
-                mu_plus, s_part_plus = self._solve_mu_batched(
-                    w, gp, plus_mask, R2_plus, sigma=+1, only=pend
-                )
+            mu_minus, s_part_minus = self._solve_mu_batched(
+                w, gp, minus_mask, R2_minus, sigma=-1, only=constrained,
+                evals_eps=self.evals_eps, mu_margin=self.mu_margin, max_bisect_it=self.max_bisect_it)
+            mu_plus, s_part_plus = self._solve_mu_batched(
+                w, gp, plus_mask, R2_plus, sigma=+1, only=constrained,
+                evals_eps=self.evals_eps, mu_margin=self.mu_margin, max_bisect_it=self.max_bisect_it)
 
-            s_p = s_part_minus + s_part_plus
+            s_p = torch.where(within_radius[:, None], s_unc_minus + s_unc_plus,
+                              s_part_minus + s_part_plus)
             norm_mw = torch.linalg.norm(s_p, dim=-1)
             s_mw = (V @ s_p.unsqueeze(-1)).squeeze(-1) * real_mask
             s_cart = self._D * s_mw
@@ -487,12 +330,22 @@ class BatchPRFO:
             s_try = torch.zeros_like(s_cart)
             s_try[pend] = s_cart[pend]
 
-            # Trial evaluation
-            calc.backup_coords()
-            calc.step_cart_(s_try)
-            E_new, _ = calc.get_ef_gpu()
-            E_new = E_new.to(dtype=DTYPE)
-            calc.restore_coords()
+            # Evaluate only pending members at their trial geometries.
+            pending = pend.nonzero(as_tuple=False).flatten().cpu().tolist()
+            step_np = s_try.detach().cpu().numpy()
+            for b in pending:
+                atoms = atoms_list[b]
+                atoms.set_positions(r_old[b] + step_np[b, :3 * len(atoms)].reshape(-1, 3))
+                step_np[b, :3 * len(atoms)] = (atoms.positions - r_old[b]).reshape(-1)
+            s_try = torch.as_tensor(step_np, dtype=DTYPE, device=device)
+            try:
+                E_trial, F_trial = self._get_ef(calc, [atoms_list[b] for b in pending])
+            except Exception:
+                for b in pending:
+                    atoms_list[b].set_positions(r_old[b])
+                raise
+            E_new = self._last_ef[0].clone()
+            E_new[pend] = E_trial
 
             # Model change - could be further optimized
             Hs = torch.einsum("bij,bj->bi", H, s_try)
@@ -513,19 +366,24 @@ class BatchPRFO:
             rej = pend & (~acc)
 
             if acc.any():
-                s_commit = torch.zeros_like(s_cart)
-                s_commit[acc] = s_cart[acc]
-                calc.step_cart_(s_commit)
-
+                self._last_ef[0][acc] = E_new[acc]
+                self._last_ef[1][acc] = F_trial[acc[pend]]
                 grow = (rho > self.eta_expand) & on_boundary & acc
-                trust_r = torch.where(
-                    grow,
-                    torch.clamp(2.0 * trust_r, max=self.trust_max),
-                    trust_r
-                )
-                last_step[acc] = s_commit[acc]
+                trust_r = torch.where(grow, torch.clamp(2 * trust_r, max=self.trust_max), trust_r)
+                last_step[acc] = s_try[acc]
                 step_accepted |= acc
-                self._dump_xyz_subset(calc, acc, it)
+                accepted_local = acc.nonzero(as_tuple=False).flatten()
+                store_batch_results(
+                    self.results, self._orig_index[accepted_local],
+                    [atoms_list[b] for b in accepted_local.cpu().tolist()],
+                    self._last_ef[0][acc], self._last_ef[1][acc], it,
+                    torch.zeros_like(accepted_local, dtype=torch.bool),
+                )
+                self._dump_xyz_subset(atoms_list, acc, it, *self._last_ef)
+                self._log_members(atoms_list, acc, it, model_change, actual_change,
+                                  rho, trust_r, norm_mw, on_boundary, last_step)
+            for b in rej.nonzero(as_tuple=False).flatten().cpu().tolist():
+                atoms_list[b].set_positions(r_old[b])
 
             trust_r = torch.where(
                 rej,
@@ -536,10 +394,6 @@ class BatchPRFO:
             self._w(self._fmt_iter_head(it, acc, rej, rho, trust_r, E_new))
             accepted |= acc
 
-        # Update acceptance rate (exponential moving average)
-        acceptance_this_iter = accepted.float().mean().item()
-        self._recent_acceptance_rate = 0.85 * self._recent_acceptance_rate + 0.15 * acceptance_this_iter
-
         # Log efficiency
         if attempts_used < max_attempts:
             self._w(f"  [Efficiency] Used {attempts_used}/{max_attempts} attempts\n")
@@ -549,11 +403,10 @@ class BatchPRFO:
     # CONVERGENCE
     # ===================================================
 
-    def _check_convergence(self, it, calc, atoms_list,
+    def _check_convergence(self, it, E_final, F_final, atoms_list,
                            trust_r, last_step, real_mask, last_rho):
 
         device = self.device
-        E_final, F_final = calc.get_ef_gpu()
         F_final = F_final.to(dtype=DTYPE)
         g_last = -F_final * real_mask.to(DTYPE)
 
@@ -604,7 +457,8 @@ class BatchPRFO:
 
     @staticmethod
     @torch.no_grad()
-    def _solve_mu_batched(w, gp, mask, R2, sigma, only):
+    def _solve_mu_batched(w, gp, mask, R2, sigma, only,
+                          evals_eps=1e-10, mu_margin=1e-8, max_bisect_it=60):
         device = w.device
         B, n = w.shape
 
@@ -627,8 +481,8 @@ class BatchPRFO:
                 continue
 
             R2_b = float(R2[b].item())
-            denom0 = torch.where(lam_b.abs() < 1e-10,
-                                 torch.sign(lam_b) * 1e-10, lam_b)
+            denom0 = torch.where(lam_b.abs() < evals_eps,
+                                 torch.sign(lam_b) * evals_eps, lam_b)
             s_unc = -num_b / denom0
             norm2_unc = float((s_unc * s_unc).sum().item())
 
@@ -647,7 +501,7 @@ class BatchPRFO:
                     return float(((num_b / denom)**2).sum().item())
 
                 wt_min = float(lam_b.min().item())
-                hi = wt_min - 1e-6
+                hi = wt_min - mu_margin
                 if not np.isfinite(F(hi)):
                     hi = wt_min - 1e-4
 
@@ -659,7 +513,7 @@ class BatchPRFO:
                     Fa = F(lo)
                     it_ex += 1
 
-                for _ in range(60):
+                for _ in range(max_bisect_it):
                     mid = 0.5 * (lo + hi)
                     Fm = F(mid)
                     if abs(Fm - R2_b) <= 1e-12 * max(1, R2_b) or abs(hi - lo) < 1e-12:
@@ -732,7 +586,7 @@ class BatchPRFO:
         step_accepted=None,  # NEW: mask of which batches actually took a step
         step_tol: float = 1e-8, 
         grad_tol: float = 1e-8, 
-        sr1_tol: float = 1e-8  # CHANGED: from 1e-10 to 1e-8
+        sr1_tol: float = 1e-8  # CHANGED: from evals_eps to 1e-8
     ):
         """
         Bofill update (Cartesian, batched) with Gaussian-style logic:
@@ -822,7 +676,7 @@ class BatchPRFO:
     # ===================================================
 
     def _open_log(self):
-        self.log_fp = open(self.output, "w", encoding="utf-8")
+        self.log_fp = open(self.output, "a", encoding="utf-8")
 
     def _close_log(self):
         if self.log_fp:
@@ -833,53 +687,56 @@ class BatchPRFO:
         self.log_fp.write(s)
         self.log_fp.flush()
 
-    def _init_xyz_paths(self, B_all):
-        self.xyz_paths = [
-            os.path.join(self.out_dir, f"ts_batch{i+1}.xyz")
-            for i in range(B_all)
-        ]
-        self.frame_counts = [0 for _ in range(B_all)]
-        for p in self.xyz_paths:
-            open(p, "w").close()
+    def _init_xyz_paths(self, atoms_list):
+        outputs = member_outputs(self.output, atoms_list, ('_prfo_traj', '_prfo_ts'))
+        self.xyz_paths, self.ts_paths, self._loggers = [], [], []
+        for atoms, output in zip(atoms_list, outputs):
+            ext = '.pdb' if atoms.info.get('pdb_template') else '.xyz'
+            base = os.path.splitext(output)[0]
+            self.xyz_paths.append(base + '_prfo_traj' + ext)
+            self.ts_paths.append(base + '_prfo_ts' + ext)
+            self._loggers.append(PRFO(output=output, atoms=atoms, paras={
+                'max_iter': self.max_outer_iter, 'recalc': self.recalc,
+                'hessian_update': self.hessian_update,
+            }))
+        self.frame_counts = [0] * len(atoms_list)
 
-    def _dump_xyz_all(self, calc, atoms_list, tag="init"):
-        with torch.no_grad():
-            pos = _get_coord_gpu(calc).detach().cpu().numpy()
-        ptr = self._ptr.detach().cpu().numpy()
-        for i_local, at in enumerate(atoms_list):
-            s, t = ptr[i_local], ptr[i_local+1]
-            idx_orig = int(self._orig_index[i_local].item())
-            symbols = self._symbols_per_batch[idx_orig]
-            self._append_xyz(idx_orig, symbols, pos[s:t], tag)
+    def _dump_xyz_all(self, atoms_list, E, F):
+        mask = torch.ones(len(atoms_list), dtype=torch.bool, device=self.device)
+        self._dump_xyz_subset(atoms_list, mask, 0, E, F)
 
-    def _dump_xyz_subset(self, calc, accept_mask, it):
-        if not accept_mask.any():
-            return
-        with torch.no_grad():
-            pos = _get_coord_gpu(calc).detach().cpu().numpy()
-        ptr = self._ptr.detach().cpu().numpy()
-        for i_local in accept_mask.nonzero(as_tuple=False).flatten().cpu().tolist():
-            s, t = ptr[i_local], ptr[i_local+1]
-            idx_orig = int(self._orig_index[i_local].item())
-            symbols = self._symbols_per_batch[idx_orig]
-            self._append_xyz(idx_orig, symbols, pos[s:t], f"iter={it}")
+    def _dump_xyz_subset(self, atoms_list, accept_mask, it, E, F):
+        energies, forces = E.detach().cpu().numpy(), F.detach().cpu().numpy()
+        indices = self._orig_index.detach().cpu().tolist()
+        for b in accept_mask.nonzero(as_tuple=False).flatten().cpu().tolist():
+            idx_orig, atoms = indices[b], atoms_list[b]
+            append_xyz_trajectory(self.xyz_paths[idx_orig], atoms, energy=energies[b],
+                                  forces=forces[b, :3 * len(atoms)].reshape(-1, 3),
+                                  iteration=self.frame_counts[idx_orig])
+            self.frame_counts[idx_orig] += 1
 
-    def _append_xyz(self, idx_orig, symbols, pos_np, comment=""):
-        path = self.xyz_paths[idx_orig]
-        n = pos_np.shape[0]
-        with open(path, "a") as f:
-            f.write(f"{n}\n")
-            f.write(f"{comment}\n")
-            for k in range(n):
-                x, y, z = pos_np[k]
-                f.write(f"{symbols[k]:<2s} {x:20.10f} {y:20.10f} {z:20.10f}\n")
-        self.frame_counts[idx_orig] += 1
+    def _log_members(self, atoms_list, accepted, it, model_change, actual_change,
+                     rho, trust_r, norm_mw, on_boundary, last_step):
+        E, F = (value.detach().cpu().numpy() for value in self._last_ef)
+        steps = last_step.detach().cpu().numpy()
+        indices = self._orig_index.detach().cpu().tolist()
+        model_change, actual_change, rho, trust_r, norm_mw, on_boundary = torch.stack(
+            (model_change, actual_change, rho, trust_r, norm_mw, on_boundary)).detach().cpu().numpy()
+        for b in accepted.nonzero(as_tuple=False).flatten().cpu().tolist():
+            atoms = atoms_list[b]
+            n = len(atoms)
+            compute_metrics(atoms, steps[b, :3 * n], F[b, :3 * n])
+            logger = self._loggers[indices[b]]
+            logger.log_iteration(it, atoms, float(E[b]), float(model_change[b]),
+                                 float(actual_change[b]), float(rho[b]), float(trust_r[b]),
+                                 float(norm_mw[b]), bool(on_boundary[b]))
 
     def _fmt_iter_head(self, it, acc, rej, rho, trust_r, E_new):
         acc_idx = acc.nonzero(as_tuple=False).flatten().cpu().tolist()
         rej_idx = rej.nonzero(as_tuple=False).flatten().cpu().tolist()
-        acc_list = [int(self._orig_index[i]) for i in acc_idx]
-        rej_list = [int(self._orig_index[i]) for i in rej_idx]
+        indices = self._orig_index.detach().cpu().tolist()
+        acc_list = [indices[i] for i in acc_idx]
+        rej_list = [indices[i] for i in rej_idx]
 
         rhos = rho.detach().cpu().numpy()
         Rs = trust_r.detach().cpu().numpy()
@@ -918,9 +775,14 @@ class BatchPRFO:
             x = float(v)
             return f"{x:>{wid}.{p}f}"
 
+        E, rho, R, max_f, rms_f, max_dp, rms_dp, f_max_th, f_rms_th, dp_max_th, dp_rms_th = torch.stack(
+            (E, rho, R, max_f, rms_f, max_dp, rms_dp, f_max_th, f_rms_th,
+             dp_max_th, dp_rms_th)).detach().cpu().numpy()
+        done = done.detach().cpu().numpy()
+        indices = self._orig_index.detach().cpu().tolist()
         B = E.shape[0]
         for b in range(B):
-            idx_orig = int(self._orig_index[b].item())
+            idx_orig = indices[b]
             lines.append(
                 f"[{idx_orig:2d}] "
                 f"{fmt(E[b], 14, 6)} "

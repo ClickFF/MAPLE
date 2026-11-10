@@ -11,24 +11,53 @@ class CommandControl:
     All other settings are global parameters.
     """
     SUPPORTED_MODELS = {
-        "ani2x",
-        "ani1x",
-        "ani1ccx",
-        "ani1xnr",
-        "maceoff23s",
-        "maceoff23m",
-        "maceoff23l",
-        "egret",
-        "aimnet2",
-        "aimnet2nse",
-        "uma",
-        "maceomol",
-        "macepols",
-        "macepolm",
-        "macepoll",
-        "fennol",
-        "fennix-bio1s",
-        "fennix-bio1m",
+        'ani1x',
+        'ani1ccx',
+        'ani2x',
+        'ani1xnr',
+        'ani2xr',
+        'ani2dr',
+        'snn-ani2xr',
+        'ani-mbis',
+        'aimnet2',
+        'aimnet2-nse',
+        'aimnet2-rxn',
+        'aimnet2-pd',
+        'aimnet2-b973c',
+        'aimnet2-2025',
+        'mace-off-23s',
+        'mace-off-23m',
+        'mace-off-23l',
+        'mace-off-23bm',
+        'mace-off-24m',
+        'mace-les-off',
+        'egret-1',
+        'egret-1e',
+        'egret-1m',
+        'egret-1s',
+        'egret-1t',
+        'mace-omol-0',
+        'mace-polar-1s',
+        'mace-polar-1m',
+        'mace-polar-1l',
+        'fennix-bio-1s',
+        'fennix-bio-1m',
+        'grace-off-1s',
+        'grace-off-1m',
+        'grace-off-1l',
+        'grace-off-2s',
+        'grace-off-2m',
+        'grace-off-2l',
+        'so3lr',
+        'so3lr-tauri-s', 
+        'so3lr-tauri-m', 
+        'so3lr-tauri-l',
+        'allegro-fm-256',
+        'allegro-fm-512',
+        'nequip-t3-cosmo',
+        'nequip-t123-cosmo',
+        'nequip-t3-gas',
+        'uma',
     }
 
     SUPPORTED_TASKS = {"sp", "opt", "ts", "scan", "freq", "irc", "md", "parmfit"}
@@ -294,6 +323,10 @@ class CommandControl:
             log_lines.append("No task specified. Defaulting to 'sp'.\n")
 
         cls._normalize_params(params)
+        if 'batch_size' in params:
+            size = params['batch_size']
+            if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+                raise ValueError('batch_size must be a positive integer')
         cls._normalize_method_flags(params, task, output_path)
         cls._validate(params, task, output_path)
         cls._log_info(output_path, log_lines)
@@ -467,6 +500,7 @@ class CommandControl:
             method_params = set().union(*cls.OPT_METHOD_PARAMS.values())
 
         allowed.add("method")
+        allowed.add("batch_size")
         allowed.update(method_params)
         if task == "scan":
             allowed.update(cls.SCAN_PARAMS)

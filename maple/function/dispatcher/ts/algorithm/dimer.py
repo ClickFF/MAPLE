@@ -10,6 +10,7 @@ Dimer implementation with:
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 import math
 import torch
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Optional, Callable, List, Tuple
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._inputs import _state
 
 from .logger import log_info
 from ...jobABC import JobABC
@@ -48,55 +50,88 @@ def vec1d(x, n_expected=None):
         raise ValueError(f"Expected size {n_expected}, got {v.size}")
     return v
 
-def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None):
-    """
-    Write a multi-frame XYZ trajectory. If energies given, write in comment line.
-    """
+def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None,
+              forces=None):
+    """Write supplied trajectory frames without evaluating them."""
     if images and images[0].info.get("pdb_template"):
         write_pdb_trajectory(filename, images, energies=energies)
         return
-    with open(filename, "w") as f:
-        for i, at in enumerate(images):
-            pos = to_numpy_f64(at.get_positions())
-            symbols = at.get_chemical_symbols()
-            f.write(f"{len(symbols)}\n")
-            if energies is not None:
-                f.write(f"Image {i}  Energy = {energies[i]:.10f}\n")
-            else:
-                f.write(f"Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
 
-def write_all_images_xyz(filename: str, atoms: Atoms, energy: Optional[float] = None, iteration: int = 0):
-    """
-    Append current single structure to an xyz trajectory file (for Dimer debug).
-    Each block corresponds to one iteration of Dimer optimization.
-    """
-    if iteration == 0 and os.path.exists(filename):
-        os.remove(filename)
+    blocks = []
+    for i, at in enumerate(images):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [f"Image {i}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w")) as f:
+        f.writelines(blocks)
+        f.flush()
+
+
+def write_all_images_xyz(filename: str, atoms: Atoms, energy: Optional[float] = None,
+                         iteration: int = 0, forces=None):
+    """Append the current geometry and its retained results."""
     if atoms.info.get("pdb_template"):
         remark = f"Iter {iteration}"
         if energy is not None:
             remark += f"  Energy = {energy:.10f}"
-        with open(filename, "a", encoding="utf-8") as f:
-            write_pdb_model(
-                f,
-                atoms,
-                atoms.info["pdb_template"],
-                model_index=iteration + 1,
-                remark=remark,
-            )
+        with open(filename, 'w' if iteration <= 1 else 'a', encoding='utf-8') as f:
+            write_pdb_model(f, atoms, atoms.info['pdb_template'],
+                            model_index=iteration + 1, remark=remark)
         return
-    pos = to_numpy_f64(atoms.get_positions())
+
+    pos = atoms.get_positions()
     symbols = atoms.get_chemical_symbols()
-    with open(filename, "a") as f:
-        f.write(f"{len(symbols)}\n")
-        if energy is not None:
-            f.write(f"Iter {iteration}  Energy = {energy:.10f}\n")
-        else:
-            f.write(f"Iter {iteration}\n")
-        for s, (x, y, z) in zip(symbols, pos):
-            f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+
+    lines = [f"{len(symbols)}\n"]
+    comment_parts = [f"Iter {iteration}"]
+    if energy is not None:
+        comment_parts.append(f"Energy = {energy:.10f}")
+        comment_parts.append('energy_unit=Hartree')
+    charge, mult = _state(atoms)
+    comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+    if atoms.cell.rank:
+        lattice = ' '.join(f'{value:.12g}' for value in atoms.cell.array.reshape(-1))
+        pbc = ' '.join('T' if flag else 'F' for flag in atoms.pbc)
+        comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+    if forces is not None:
+        kind = 'constraint_adjusted' if atoms.constraints else 'raw'
+        comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+        comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+    lines.append('  '.join(comment_parts) + '\n')
+    for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+        line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+        if forces is not None:
+            fx, fy, fz = forces[j]
+            line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+        lines.append(line + '\n')
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w" if iteration <= 1 else "a")) as f:
+        f.writelines(lines)
+        f.flush()
 
 # =============================================================================
 # ------------------------------ Dimer Params ---------------------------------
@@ -123,6 +158,7 @@ class DimerParams:
     kappa_to_flip: float = 0.0          # if kappa < this value, flip parallel component
 
     # Iterations
+    batch_size: Optional[int] = None
     max_iter: int = 200
 
     # Metric / projections
@@ -347,6 +383,14 @@ class Dimer(JobABC):
             lines.append(f"{idx:<4d}{s:>2s}{x:18.4f}{y:18.4f}{z:18.4f}")
         return "\n".join(lines) + "\n"
 
+    def _get_hvp(self, n):
+        from maple.function.calculator._batch import hvp_single
+        Hn, forces, energy = hvp_single(self.atoms.calc, self.atoms, n,
+                                    self.params.delta, self.params.batch_size)
+        device = getattr(self.atoms.calc, 'device', 'cpu')
+        return tuple(torch.as_tensor(value, dtype=torch.float64, device=device).reshape(-1)
+                     for value in (Hn, forces, energy))
+
     def run(self):
         """
         Main Dimer optimization loop with autograd-based Hessian-vector product (Hn).
@@ -370,7 +414,7 @@ class Dimer(JobABC):
 
         # ------------------ initial eval via autograd HVP ------------------
         # get forces & energy once (Hn unused for initial report)
-        _, forces_t, energy_t = self.atoms.calc.get_hvp(self.atoms, n)
+        _, forces_t, energy_t = self._get_hvp(n)
         forces_np = forces_t.detach().cpu().numpy()
         E0 = float(energy_t.detach().cpu().item())
         maxF0 = float(np.max(np.linalg.norm(forces_np.reshape(-1, 3), axis=1)))
@@ -411,7 +455,7 @@ class Dimer(JobABC):
 
             for _ in range(p.rot_max_iter):
                 # Hn from autograd; discard forces/energy here
-                Hn_t, _, _ = self.atoms.calc.get_hvp(self.atoms, n_curr)
+                Hn_t, _, _ = self._get_hvp(n_curr)
                 dev, dty = Hn_t.device, Hn_t.dtype
                 n_th = torch.tensor(n_curr, device=dev, dtype=dty)
 
@@ -437,13 +481,15 @@ class Dimer(JobABC):
             return n_curr, max_frot, rms_frot
 
         # ======================= main iteration loop =======================
+        converged = False
+        it = 0
         for it in range(1, p.max_iter + 1):
 
             # (1) rotation step using autograd HVP
             n, max_frot, rms_frot = rotate_minimize_kappa(n)
 
             # (2) translation-side evaluation in one pass
-            Hn_t, forces_t, energy_t = self.atoms.calc.get_hvp(self.atoms, n)
+            Hn_t, forces_t, energy_t = self._get_hvp(n)
             forces_np = forces_t.detach().cpu().numpy()
             E = float(energy_t.detach().cpu().item())
 
@@ -468,7 +514,10 @@ class Dimer(JobABC):
                 on_boundary = True
 
             new_positions = self.atoms.get_positions() + step_vec.reshape(-1, 3)
-            self.atoms.set_positions(new_positions)
+            trial = self.atoms.copy()
+            trial.set_positions(new_positions)
+            new_positions = trial.positions
+            step_vec = (new_positions - self.atoms.positions).reshape(-1)
             alpha = (max(0.5 * alpha, 0.1 * p.step0) if on_boundary
                     else min(1.2 * alpha, p.step_max))
 
@@ -507,20 +556,30 @@ class Dimer(JobABC):
 
             if p.save_traj:
                 # Your local helper supports single Atoms; keeping your current call signature
-                write_all_images_xyz(traj_file, self.atoms, energy=E, iteration=it)
+                write_all_images_xyz(traj_file, self.atoms, energy=E, iteration=it,
+                                     forces=forces_np.reshape(-1, 3))
+
+            self.atoms.set_positions(new_positions)
 
             # (6) convergence: all 4 PRFO-style criteria
             if (max_f <= self.atoms.f_max_th and
                 rms_f <= self.atoms.f_rms_th and
                 max_dp <= self.atoms.dp_max_th and
                 rms_dp <= self.atoms.dp_rms_th):
+                converged = True
                 log_info([f"\nDimer optimization converged at iteration {it}.\n"], self.output)
                 break
 
         # ------------------ final write & brief summary ------------------
-        _, _, E_final_t = self.atoms.calc.get_hvp(self.atoms, n)
+        _, F_final_t, E_final_t = self._get_hvp(n)
         E_final = float(E_final_t.detach().cpu().item())
-        write_xyz(ts_file, [self.atoms], energies=[E_final])
+        F_final = to_numpy_f64(F_final_t).reshape(-1, 3)
+        self.results = {'atoms': self.atoms, 'energy': E_final, 'forces': F_final,
+                        'iterations': it, 'converged': converged}
+        write_xyz(ts_file, [self.atoms], energies=[E_final], forces=[F_final])
+        if p.save_traj:
+            write_all_images_xyz(traj_file, self.atoms, energy=E_final,
+                                 iteration=it + 1, forces=F_final)
 
         log_info([
             "\n---------------------------------------------------------------\n",
@@ -535,3 +594,5 @@ class Dimer(JobABC):
             f"Wrote TS guess to:         {ts_file}\n"
         ], self.output)
 
+
+        return self.atoms

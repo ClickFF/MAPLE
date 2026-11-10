@@ -26,6 +26,7 @@ class SilentScanOptions:
     memory: Optional[int] = None
     curvature: Optional[float] = None
     extra_opt: dict = field(default_factory=dict)
+    batch_size: int | None = None
 
     def to_params(self) -> dict:
         opt = dict(self.extra_opt)
@@ -36,6 +37,7 @@ class SilentScanOptions:
         if self.curvature is not None:
             opt.setdefault("curvature", float(self.curvature))
         return {
+            "batch_size": self.batch_size,
             "mode": str(self.mode).strip().lower(),
             "backend": str(self.backend).strip().lower(),
             "constraint_mode": str(self.constraint_mode).strip().lower(),

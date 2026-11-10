@@ -25,6 +25,7 @@ from typing import List, Optional
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._batch import energy_forces_single
 
 from ._common import compute_metrics, is_converged, write_xyz
 from .DIIS import DIISAccelerator, DIISParams
@@ -402,12 +403,12 @@ class SDCG(JobABC):
         if self.params.verbose == 1:
             self.log_info(info_message)
 
-    def _finalize_run(self, energy: float, summary: str, opt_traj_file: str) -> None:
+    def _finalize_run(self, energy: float, summary: str, opt_traj_file: str, forces=None) -> None:
         """Write final optimized structure and log the closing summary."""
         base, _ = os.path.splitext(self.output)
         output_pdb = self.atoms.info.get("pdb_template")
         opt_file = base + ("_opt.pdb" if output_pdb else "_opt.xyz")
-        write_xyz(opt_file, [self.atoms], energies=[energy])
+        write_xyz(opt_file, [self.atoms], energies=[energy], forces=[forces])
         if self.params.verbose != 1 and self._last_iter_info is not None:
             self.log_info(self._last_iter_info)
         info = [f"\n{summary}\n"]
@@ -436,9 +437,8 @@ class SDCG(JobABC):
         atoms = self.atoms
 
         # Get initial state
-        energy = float(atoms.get_potential_energy(force_consistent=True))
-        write_xyz(opt_traj_file, [atoms.copy()], energies=[energy])
-        forces = atoms.get_forces()
+        energy, forces = energy_forces_single(atoms.calc, atoms)
+        write_xyz(opt_traj_file, [atoms.copy()], energies=[energy], forces=[forces])
 
         # Auto cg_switch_fmax: 0.5 * initial max force
         initial_max_f = np.abs(forces).max()
@@ -453,8 +453,9 @@ class SDCG(JobABC):
 
         iteration = 0
 
+        self.results = {'atoms': atoms, 'energy': energy, 'forces': forces,
+                        'iterations': 0, 'converged': False}
         while iteration < self.params.max_iter:
-            forces = atoms.get_forces()
 
             # Check SD -> CG phase transition
             if self._phase == "sd" and self.params.cg_enabled:
@@ -482,8 +483,11 @@ class SDCG(JobABC):
                 step = self._clip_step(step)
                 atoms.set_positions(saved_positions + step)
 
-                new_energy = float(atoms.get_potential_energy(force_consistent=True))
-                new_forces = atoms.get_forces()
+                try:
+                    new_energy, new_forces = energy_forces_single(atoms.calc, atoms)
+                except Exception:
+                    atoms.set_positions(saved_positions)
+                    raise
                 new_max_f = np.abs(new_forces).max()
                 old_max_f = np.abs(forces).max()
 
@@ -510,8 +514,13 @@ class SDCG(JobABC):
 
                 atoms.set_positions(atoms.get_positions() + step)
 
-                energy = float(atoms.get_potential_energy(force_consistent=True))
-                forces = atoms.get_forces()
+                try:
+                    energy, forces = energy_forces_single(atoms.calc, atoms)
+                except Exception:
+                    atoms.set_positions(saved_positions)
+                    raise
+
+            step = atoms.positions - saved_positions
 
             # Update BB history
             self._prev_positions = saved_positions
@@ -531,12 +540,14 @@ class SDCG(JobABC):
             self._log_iter(last_info)
 
             converged = is_converged(atoms)
+            self.results.update(energy=energy, forces=forces, iterations=iteration, converged=converged)
             write_xyz(
                 opt_traj_file,
                 [atoms.copy()],
                 energies=[energy],
                 mode="a",
                 start_index=iteration,
+                forces=[forces],
             )
 
             if converged:
@@ -544,7 +555,7 @@ class SDCG(JobABC):
                     energy,
                     f"SDCG converged at iteration {iteration} "
                     f"(phase: {self._phase.upper()}).",
-                    opt_traj_file,
+                    opt_traj_file, forces=forces,
                 )
                 return atoms
 
@@ -552,6 +563,6 @@ class SDCG(JobABC):
             energy,
             f"SDCG did NOT converge after {self.params.max_iter} iterations "
             f"(final phase: {self._phase.upper()}).",
-            opt_traj_file,
+            opt_traj_file, forces=forces,
         )
         return atoms

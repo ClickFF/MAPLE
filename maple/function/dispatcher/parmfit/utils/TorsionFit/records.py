@@ -20,6 +20,7 @@ class TorsionScanRuntime:
     mode: str = "relaxed"
     backend: str = "lbfgs"   #lbfgs/cgws/cgbs
     constraint_mode: str = "fixinternals"  #fixinternals/projected 
+    batch_size: int | None = None
 
     @property
     def method(self) -> str:
@@ -27,6 +28,7 @@ class TorsionScanRuntime:
 
     def to_scan_params(self) -> dict[str, object]:
         return {
+            "batch_size": self.batch_size,
             "mode": self.mode,
             "backend": self.backend,
             "constraint_mode": self.constraint_mode,

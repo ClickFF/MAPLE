@@ -80,7 +80,6 @@ class UMACalculator(FAIRChemCalculator):
         'inference',
         'overrides',
     )
-    MODEL_PATH_OPTION = 'checkpoint_path'
 
     @classmethod
     def build_kwargs_from_options(cls, model, options, *, resolved_model_path=None):

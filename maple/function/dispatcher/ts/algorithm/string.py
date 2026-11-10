@@ -17,12 +17,15 @@ Units:
 
 from __future__ import annotations
 import os
+from contextlib import nullcontext
 import copy
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._inputs import _state
+from maple.function.calculator._batch import energy_forces_single, energy_forces_images
 
 # You already have these utilities / mixins in your codebase:
 from .logger import log_info
@@ -72,24 +75,46 @@ def kabsch_align(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, float, np.nd
     return Q_aligned, rmsd, R, t
 
 
-def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None):
+def write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None, forces=None):
     """
     Write a multi-frame XYZ trajectory. If energies given, write in comment line.
     """
     if images and images[0].info.get("pdb_template"):
         write_pdb_trajectory(filename, images, energies=energies)
         return
-    with open(filename, "w") as f:
-        for i, at in enumerate(images):
-            pos = to_numpy_f64(at.get_positions())
-            symbols = at.get_chemical_symbols()
-            f.write(f"{len(symbols)}\n")
-            if energies is not None:
-                f.write(f"Image {i}  Energy = {energies[i]:.8f}\n")
-            else:
-                f.write(f"Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+
+    blocks = []
+    for i, at in enumerate(images):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [f"Image {i}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w")) as f:
+        f.writelines(blocks)
+        f.flush()
 
 
 def inherit_attrs(src: Atoms, dst: Atoms):
@@ -118,7 +143,7 @@ def atoms_to_xyz_block(atoms: Atoms) -> str:
 
 
 def get_energies(images: List[Atoms]) -> List[float]:
-    return [float(at.get_potential_energy(force_consistent=True)) for at in images]
+    return energy_forces_images(images)[0].tolist()
 
 
 def rms_force_perp(Fp_list: List[np.ndarray]) -> float:
@@ -291,6 +316,7 @@ class LBFGSDriver:
 
 @dataclass
 class GSMParams:
+    batch_size: Optional[int] = None
     # ---- Growth (engineering) ----
     grow_step: float = 0.12               # initial step length (Ang)
     grow_step_min: float = 0.02           # minimal step to accept (Ang)
@@ -347,8 +373,9 @@ class GSM(JobABC):
     """
 
     def __init__(self, output: str, atoms_R: Atoms, atoms_P: Atoms,
-                 paras: Optional[dict] = None):
+                 paras: Optional[dict] = None, images: Optional[List[Atoms]] = None):
         super().__init__(output)
+        self.input_images = images
         self.atoms_R = atoms_R
         self.atoms_P = atoms_P
         self.atoms_R.calc = atoms_R.calc
@@ -435,8 +462,7 @@ class GSM(JobABC):
 
         def energy_and_grad(xvec):
             img.set_positions(xvec.reshape(-1,3))
-            E = float(img.get_potential_energy(force_consistent=True))
-            F = to_numpy_f64(img.get_forces()).reshape(-1,3)
+            E, F = energy_forces_single(img.calc, img)
             F = project_out_rigidbody_forces(F, xvec.reshape(-1,3), masses).reshape(-1)
             g = -F
             g = proj_perp(g)
@@ -480,13 +506,12 @@ class GSM(JobABC):
 
             # quick check at predicted point
             pos  = to_numpy_f64(trial.get_positions())
-            Fraw = to_numpy_f64(trial.get_forces()).reshape(-1,3)
+            E_pred, Fraw = energy_forces_single(trial.calc, trial)
             Frb  = project_out_rigidbody_forces(Fraw, pos, masses_last).reshape(-1)
             tau3N = np.tile(dir3.reshape(1,3), (len(trial),1)).reshape(-1)
             F_perp = Frb - float(np.dot(Frb, tau3N)) * tau3N
             maxFperp_pred = float(np.max(np.abs(F_perp)))
 
-            E_pred = float(trial.get_potential_energy(force_consistent=True))
             uphill = (E_pred - E_last) > p.grow_energy_tol
 
             # backtrack on step if energy is too uphill or force is too large
@@ -533,14 +558,14 @@ class GSM(JobABC):
         # Run PRFO to refine TS
         prfo = PRFO(output=self.output, atoms=ts_guess)
         ts_opt = prfo.run()
-        E_TS   = float(ts_opt.get_potential_energy(force_consistent=True))
+        E_TS = prfo.results["energy"]
 
         # Create a path with TS inserted after the original CI (HEI)
         images_ts = [img for img in images]
         images_ts.insert(hei_idx + 1, ts_opt)
 
         # Energies of the augmented path
-        Es_path = get_energies(images_ts)
+        Es_path, raw_forces = energy_forces_images(images_ts, self.params.batch_size)
         kcal_per_Eh = 627.509
 
         # Helper: energy-weighted tangent for projected-perp forces
@@ -574,7 +599,7 @@ class GSM(JobABC):
                 maxFp_list.append(0.0)
                 rmsFp_list.append(0.0)
             else:
-                F_raw = to_numpy_f64(at.get_forces())
+                F_raw = raw_forces[i]
                 pos   = to_numpy_f64(at.get_positions())
                 masses= to_numpy_f64(at.get_masses())
                 F_rb  = project_out_rigidbody_forces(F_raw, pos, masses).reshape(-1)
@@ -588,8 +613,8 @@ class GSM(JobABC):
         ext = ".pdb" if images_ts and images_ts[0].info.get("pdb_template") else ".xyz"
         stringts_mep = base_prefix + "_stringts_mep" + ext
         stringts_ts  = base_prefix + "_stringts_ts" + ext
-        write_xyz(stringts_mep, images_ts, energies=Es_path)
-        write_xyz(stringts_ts, [ts_opt], energies=[E_TS])
+        write_xyz(stringts_mep, images_ts, energies=Es_path, forces=raw_forces)
+        write_xyz(stringts_ts, [ts_opt], energies=[E_TS], forces=[prfo.results["forces"]])
 
         # Pretty-print TS coordinates
         def atoms_to_xyz_lines(atoms: Atoms) -> List[str]:
@@ -633,6 +658,9 @@ class GSM(JobABC):
 
 
 
+        self.results = {'images': images_ts, 'energy': np.asarray(Es_path), 'forces': raw_forces,
+                        'iterations': prfo.results['iterations'], 'converged': prfo.results['converged']}
+
     # ------------------------------- main flow --------------------------------
 
     def run(self):
@@ -642,17 +670,16 @@ class GSM(JobABC):
         2) Merge L + reversed R and equal-arc reparameterization to fixed n_images.
         3) Take HEI (on the reparameterized path) as TS guess and call PRFO via restart_run().
         """
-        def forces_info(atoms):
-            F = to_numpy_f64(atoms.get_forces())
+        def forces_info(F):
             maxF = np.max(np.linalg.norm(F, axis=1))
             rmsF = np.sqrt(np.mean(np.linalg.norm(F, axis=1) ** 2))
             return maxF, rmsF
 
         # --- Report endpoints
-        E_R = self.atoms_R.get_potential_energy(force_consistent=True)
-        E_P = self.atoms_P.get_potential_energy(force_consistent=True)
-        maxF_R, rmsF_R = forces_info(self.atoms_R)
-        maxF_P, rmsF_P = forces_info(self.atoms_P)
+        endpoint_E, endpoint_F = energy_forces_images([self.atoms_R, self.atoms_P], self.params.batch_size)
+        E_R, E_P = endpoint_E
+        maxF_R, rmsF_R = forces_info(endpoint_F[0])
+        maxF_P, rmsF_P = forces_info(endpoint_F[1])
 
         log_info([
             "\nProperties of fixed STRING end points:\n",
@@ -674,6 +701,9 @@ class GSM(JobABC):
         log_info([f"\nAlignment done. RMSD: {rmsd:.6f} (Angstrom)\n"], self.output)
 
         base, _ = os.path.splitext(self.output)
+
+        if self.input_images is not None:
+            return self._finish_path(self.input_images, base)
 
         # --- Initialize two growth fronts
         L: List[Atoms] = [self._copy_with_inherit(self.atoms_R)]
@@ -927,6 +957,9 @@ class GSM(JobABC):
             return images
 
         images = concat_and_resample(L, R_, self.params.n_images)
+        return self._finish_path(images, base)
+
+    def _finish_path(self, images, base):
         for img in images:
             if img.calc is None:
                 img.calc = self.atoms_R.calc
@@ -936,13 +969,13 @@ class GSM(JobABC):
         # Dump growth-final equal-arc path & HEI
         ext = ".pdb" if images and images[0].info.get("pdb_template") else ".xyz"
         grow_final = base + "_gsm_grow_final" + ext
-        write_xyz(grow_final, images, energies=get_energies(images))
-        Es = get_energies(images)
+        Es, raw_forces = energy_forces_images(images, self.params.batch_size)
+        write_xyz(grow_final, images, energies=Es, forces=raw_forces)
         hei = max(range(1, len(images) - 1), key=lambda i: Es[i]) if len(images) > 2 else 0
         mep_path = base + "_gsm_mep" + ext   # equal-arc path
         hei_path = base + "_gsm_hei" + ext
-        write_xyz(mep_path, images, energies=Es)
-        write_xyz(hei_path, [images[hei]], energies=[Es[hei]])
+        write_xyz(mep_path, images, energies=Es, forces=raw_forces)
+        write_xyz(hei_path, [images[hei]], energies=[Es[hei]], forces=[raw_forces[hei]])
 
         log_info([
             f"\nWrote GSM grow-final path to: {grow_final}\n",
@@ -952,3 +985,5 @@ class GSM(JobABC):
 
         # --- Direct TS refinement via PRFO/RFO on HEI (no CI-STRING / no full relax)
         self.restart_run(images, hei, base)
+
+        return self.results["images"]

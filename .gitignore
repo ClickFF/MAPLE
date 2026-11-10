@@ -180,11 +180,14 @@ examples/md/**/*.xyz
 /.omc/
 /docs/
 
+maple/function/calculator/model/
+
 # Generated explicit-solvent example outputs
 examples/opt/exp-solv/*.out
 examples/opt/exp-solv/*.xyz
 
 # Parmfit artifacts
+maple/function/dispatcher/parmfit/.zcode/
 maple/function/dispatcher/parmfit/doc/
 maple/function/dispatcher/parmfit/test/
 

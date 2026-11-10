@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import torch
+from maple.function.calculator._batch import energy_forces_images
 
 TORCH_DTYPE = torch.float64
 TORCH_DTYPE_LABEL = "float64"
@@ -95,16 +96,16 @@ class TorchDirectMaxFlux(_BaseTorchDirectMaxFlux):
 
     def __init__(self, *args, energy_force_scale=1.0, **kwargs):
         self.energy_force_scale = float(energy_force_scale)
+        self.batch_size = None
         kwargs["dtype"] = TORCH_DTYPE
         super().__init__(*args, **kwargs)
 
     def _get_forces_by_img_idxs(self, idxs, energies, forces):
-        super()._get_forces_by_img_idxs(idxs, energies, forces)
-        if self.energy_force_scale == 1.0:
-            return
-        for i in idxs:
-            energies[i] *= self.energy_force_scale
-            forces[i] *= self.energy_force_scale
+        E, F = energy_forces_images([self.images[i] for i in idxs],
+                                    self.batch_size, force_consistent=False)
+        for slot, i in enumerate(idxs):
+            energies[i] = E[slot] * self.energy_force_scale
+            forces[i] = F[slot] * self.energy_force_scale
 
 
 def interpolate_fbenm_torch(ref_images, *args, dmf_options=None, device=None, **kwargs):
