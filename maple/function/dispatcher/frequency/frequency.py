@@ -14,6 +14,8 @@ from dataclasses import dataclass, fields
 from typing import Tuple, Optional, Dict, Tuple as Tup, Literal
 from ase import Atoms
 from ..jobABC import JobABC
+from maple.function.calculator._batch import calculate_batch, hessian_single
+from maple.function.utility import Molecules
 
 from maple.function.timer import timer
 
@@ -108,6 +110,7 @@ class FrequencyParams:
     treat_imag_as_real: bool = False
     pressure_kpa: float = 101.325
     device: str = "cpu"
+    batch_size: Optional[int] = None
 
 @dataclass
 class PrintParams:
@@ -192,6 +195,7 @@ class FrequencyBase(JobABC):
         omega0_cm1: float = 100.0,
         nu_floor_cm1: float = 1.0,
         device: str = "cpu",            
+        batch_size: Optional[int] = None,
     ):
         """
         Initialize the frequency analysis job.
@@ -223,6 +227,7 @@ class FrequencyBase(JobABC):
 
        # ---- Parse device string: support cpu / auto / gpu / gpu0 / gpu1 / cuda:0, etc. ----
         self.device = self._parse_device(device)
+        self.batch_size = batch_size
 
         # User/print-surface injection points (set by FrequencyDriver)
         self.verbosity: int = 1
@@ -230,7 +235,7 @@ class FrequencyBase(JobABC):
         self._print = PrintParams()
 
     # ---------------------- main workflow ----------------------
-    def run(self) -> None:
+    def run(self, hessian=None) -> None:
         """
         Execute the full frequency analysis workflow.
 
@@ -244,7 +249,7 @@ class FrequencyBase(JobABC):
         self.log_info([f"Starting frequency analysis calculation, Number of atoms: {len(self.atoms)}"])
 
         try:
-            hessian = self.get_hessian()
+            hessian = self.get_hessian(hessian)
             freqs_cm1, modes_cart = self.compute_frequencies(hessian)
 
             # Handle small imaginary frequencies if requested
@@ -253,6 +258,8 @@ class FrequencyBase(JobABC):
                 freqs_cm1 = np.where(freqs_cm1 < -tol, freqs_cm1, np.abs(freqs_cm1))
 
             thermo = self.compute_thermo(freqs_cm1)
+            self.results = dict(atoms=self.atoms, hessian=hessian,
+                                freqs_cm1=freqs_cm1, modes_cart=modes_cart, thermo=thermo)
 
             self._write_output(freqs_cm1, modes_cart, thermo)
             self.log_info(["Frequency analysis completed", f"Output file: {self.output}"])
@@ -302,7 +309,7 @@ class FrequencyBase(JobABC):
         else:
             return np.linalg.eigh(np.asarray(mat))
 
-    def get_hessian(self) -> np.ndarray:
+    def get_hessian(self, hessian=None) -> np.ndarray:
         """
         Retrieve the Cartesian Hessian and fix common shape issues.
 
@@ -313,11 +320,11 @@ class FrequencyBase(JobABC):
             RuntimeError: If the calculator lacks `get_hessian`.
             ValueError: If the Hessian shape does not match (3N, 3N).
         """
-        calc = self.atoms.calc
-        if calc is None or not hasattr(calc, "get_hessian"):
-            raise RuntimeError("Atom calculator must implement get_hessian method")
-
-        hessian = calc.get_hessian(self.atoms)
+        if hessian is None:
+            calc = self.atoms.calc
+            if calc is None or not hasattr(calc, "get_hessian"):
+                raise RuntimeError("Atom calculator must implement get_hessian method")
+            hessian = hessian_single(calc, self.atoms, self.batch_size)
 
         # Convert to numpy array defensively.
         if _TORCH_OK and isinstance(hessian, torch.Tensor):
@@ -356,6 +363,137 @@ class FrequencyBase(JobABC):
         """
      
         raise NotImplementedError("Subclasses must implement compute_frequencies().")
+
+    def _compute_mw(self, hessian_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Diagonalize mass-weighted Hessian to obtain frequencies and modes (ORCA-compatible).
+
+        UNIT CONVENTION:
+            - Input Hessian: Hartree/Angstrom² (NOT Bohr²!)
+            - Masses: amu (atomic mass units)
+            - Output frequencies: cm⁻¹
+
+        Args:
+            hessian_matrix: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - frequencies_cm1: Sorted frequencies in cm⁻¹
+                - modes_cart: Mass-weighted normalized normal modes
+        """
+        masses = np.asarray(self.atoms.get_masses())
+
+        # Step 1: Mass-weighting transformation
+        # H_mw = M^{-1/2} @ H @ M^{-1/2}
+        # where M is in amu (consistent with Hessian in Angstrom²)
+        inv_sqrt_m = np.repeat(1.0 / np.sqrt(masses), 3)
+        h_mw = hessian_matrix * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
+
+        # Step 2: Project rigid motions in the same mass-weighted space.
+        if self.verbosity >= 2:
+            self.log_info(["Projecting out translations and rotations...\n"])
+        h_mw = self._project_hessian(h_mw)
+
+        # Step 3: Diagonalize mass-weighted Hessian
+        evals, evecs_mw = self._eigh(h_mw)
+
+        # Step 4: Convert eigenvalues to frequencies (cm⁻¹)
+        # CRITICAL: Conversion factor for Ha/Angstrom² + amu units
+        # Formula: ν = sqrt(E_h/(amu·Å²)) / (2πc) × 10^8
+        #
+        # Derivation:
+        #   sqrt(Hartree / (amu * Angstrom²))
+        #   = sqrt(4.3597e-18 J / (1.6605e-27 kg * 1e-20 m²))
+        #   = sqrt(2.625e29) s⁻¹
+        #   = 5.124e14 s⁻¹
+        #   Divide by 2πc (in cm/s) and multiply by 10^8:
+        #   = 5.124e14 / (2π * 2.998e10) * 1e8
+        #   = 2721.1383 cm⁻¹
+        #
+        # NOTE: This is different from ORCA's 5140.4867 because:
+        #       - ORCA uses Ha/Bohr² (not Angstrom²)
+        #       - ORCA uses electron mass (not amu)
+        conversion = 2721.1383  # Ha/Angstrom² + amu -> cm⁻¹
+
+        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
+
+        # Step 5: Transform eigenvectors back to Cartesian coordinates
+        modes_cart = evecs_mw.T * inv_sqrt_m[None, :]
+
+        # Step 6: Apply mass-weighted normalization (ORCA convention: Q^T M Q = 1)
+        M_diag = np.repeat(masses, 3)
+
+        for i in range(len(modes_cart)):
+            norm_mw = np.sqrt(np.sum(modes_cart[i]**2 * M_diag))
+            if norm_mw > 1e-10:
+                modes_cart[i] /= norm_mw
+
+        # Step 7: Sort modes in ORCA order
+        zero_tol = 5.0
+
+        zero_mask = np.abs(freqs_cm1) < zero_tol
+        imag_mask = (freqs_cm1 < -zero_tol)
+        real_mask = (freqs_cm1 > zero_tol)
+
+        zero_indices = np.where(zero_mask)[0]
+        imag_indices = np.where(imag_mask)[0]
+        real_indices = np.where(real_mask)[0]
+
+        zero_indices = zero_indices[np.argsort(np.abs(freqs_cm1[zero_indices]))]
+        imag_indices = imag_indices[np.argsort(freqs_cm1[imag_indices])]
+        real_indices = real_indices[np.argsort(freqs_cm1[real_indices])]
+
+        sorted_indices = np.concatenate([zero_indices, imag_indices, real_indices])
+
+        freqs_sorted = freqs_cm1[sorted_indices]
+        modes_sorted = modes_cart[sorted_indices]
+
+        # Diagnostic output
+        if self.verbosity >= 1:
+            n_zero = len(zero_indices)
+            n_imag = len(imag_indices)
+            n_real = len(real_indices)
+            self.log_info([
+                f"\nFrequency analysis summary:\n",
+                f"  Zero frequencies (|ν| < {zero_tol} cm⁻¹):    {n_zero}\n",
+                f"  Imaginary frequencies (ν < -{zero_tol} cm⁻¹): {n_imag}\n",
+                f"  Real frequencies (ν > {zero_tol} cm⁻¹):       {n_real}\n\n",
+            ])
+
+            if not self._is_linear_molecule() and n_zero >= 6:
+                max_zero_freq = np.max(np.abs(freqs_sorted[:6]))
+                if max_zero_freq > 1.0:
+                    self.log_info([
+                        f"  WARNING: First 6 frequencies not all near zero.\n",
+                        f"           Max |freq| in first 6: {max_zero_freq:.2f} cm⁻¹\n",
+                        f"           This may indicate poor Hessian quality or projection issues.\n\n"
+                    ])
+
+        return freqs_sorted, modes_sorted
+
+    def _compute_nonmw(self, hessian_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Diagonalize the Cartesian Hessian without mass-weighting.
+
+        UNIT CONVENTION:
+            - Input Hessian: Hartree/Angstrom²
+            - Output frequencies: cm⁻¹ (but physically incorrect without masses!)
+
+        Args:
+            hessian_matrix: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: (frequencies_cm1, modes_in_cartesian)
+        """
+        evals, evecs = self._eigh(hessian_matrix)
+
+        # This conversion is only valid for mass-weighted systems
+        # Using it here gives incorrect results - use MW method instead!
+        conversion = 2721.1383  # Ha/Angstrom² -> cm⁻¹ (assumes unit mass)
+        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
+
+        modes_cart = evecs.T
+        return freqs_cm1, modes_cart
 
     def _mass_weighted_rigid_basis(self) -> np.ndarray:
         """Build an orthonormal basis of mass-weighted rigid motions."""
@@ -855,7 +993,8 @@ class FrequencyBase(JobABC):
             self.log_info(["\n"])
 
     # ---------------------- verbosity=10 summary writer ----------------------
-    def _write_summary(self, freqs: np.ndarray, modes: np.ndarray, thermo: ThermoResults) -> None:
+    def _write_summary(self, freqs: np.ndarray, modes: np.ndarray, thermo: ThermoResults,
+                       mode: str = "w", title: str = "") -> None:
         """
         Write a concise summary file (*_summary.out) for verbosity=10.
         
@@ -882,7 +1021,9 @@ class FrequencyBase(JobABC):
         n_atoms = len(self.atoms)
         T = self.temperature
         
-        with open(summary_path, 'w', encoding='utf-8') as f:
+        with open(summary_path, mode, encoding='utf-8') as f:
+            if title:
+                f.write(f"\n{title}\n")
             # ==================== Section 1: Thermodynamic Summary ====================
             f.write("=" * 70 + "\n")
             f.write("THERMODYNAMIC SUMMARY\n")
@@ -978,111 +1119,7 @@ class FrequencyBase(JobABC):
 # ======================================================================
 class MWFrequency(FrequencyBase):
     def compute_frequencies(self, hessian_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Diagonalize mass-weighted Hessian to obtain frequencies and modes (ORCA-compatible).
-        
-        UNIT CONVENTION:
-            - Input Hessian: Hartree/Angstrom² (NOT Bohr²!)
-            - Masses: amu (atomic mass units)
-            - Output frequencies: cm⁻¹
-        
-        Args:
-            hessian_matrix: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
-        
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: 
-                - frequencies_cm1: Sorted frequencies in cm⁻¹
-                - modes_cart: Mass-weighted normalized normal modes
-        """
-        masses = np.asarray(self.atoms.get_masses())
-        
-        # Step 1: Mass-weighting transformation
-        # H_mw = M^{-1/2} @ H @ M^{-1/2}
-        # where M is in amu (consistent with Hessian in Angstrom²)
-        inv_sqrt_m = np.repeat(1.0 / np.sqrt(masses), 3)
-        h_mw = hessian_matrix * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
-
-        # Step 2: Project rigid motions in the same mass-weighted space.
-        if self.verbosity >= 2:
-            self.log_info(["Projecting out translations and rotations...\n"])
-        h_mw = self._project_hessian(h_mw)
-
-        # Step 3: Diagonalize mass-weighted Hessian
-        evals, evecs_mw = self._eigh(h_mw)
-        
-        # Step 4: Convert eigenvalues to frequencies (cm⁻¹)
-        # CRITICAL: Conversion factor for Ha/Angstrom² + amu units
-        # Formula: ν = sqrt(E_h/(amu·Å²)) / (2πc) × 10^8
-        # 
-        # Derivation:
-        #   sqrt(Hartree / (amu * Angstrom²))
-        #   = sqrt(4.3597e-18 J / (1.6605e-27 kg * 1e-20 m²))
-        #   = sqrt(2.625e29) s⁻¹
-        #   = 5.124e14 s⁻¹
-        #   Divide by 2πc (in cm/s) and multiply by 10^8:
-        #   = 5.124e14 / (2π * 2.998e10) * 1e8
-        #   = 2721.1383 cm⁻¹
-        #
-        # NOTE: This is different from ORCA's 5140.4867 because:
-        #       - ORCA uses Ha/Bohr² (not Angstrom²)
-        #       - ORCA uses electron mass (not amu)
-        conversion = 2721.1383  # Ha/Angstrom² + amu -> cm⁻¹
-        
-        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
-        
-        # Step 5: Transform eigenvectors back to Cartesian coordinates
-        modes_cart = evecs_mw.T * inv_sqrt_m[None, :]
-        
-        # Step 6: Apply mass-weighted normalization (ORCA convention: Q^T M Q = 1)
-        M_diag = np.repeat(masses, 3)
-        
-        for i in range(len(modes_cart)):
-            norm_mw = np.sqrt(np.sum(modes_cart[i]**2 * M_diag))
-            if norm_mw > 1e-10:
-                modes_cart[i] /= norm_mw
-        
-        # Step 7: Sort modes in ORCA order
-        zero_tol = 5.0
-        
-        zero_mask = np.abs(freqs_cm1) < zero_tol
-        imag_mask = (freqs_cm1 < -zero_tol)
-        real_mask = (freqs_cm1 > zero_tol)
-        
-        zero_indices = np.where(zero_mask)[0]
-        imag_indices = np.where(imag_mask)[0]
-        real_indices = np.where(real_mask)[0]
-        
-        zero_indices = zero_indices[np.argsort(np.abs(freqs_cm1[zero_indices]))]
-        imag_indices = imag_indices[np.argsort(freqs_cm1[imag_indices])]
-        real_indices = real_indices[np.argsort(freqs_cm1[real_indices])]
-        
-        sorted_indices = np.concatenate([zero_indices, imag_indices, real_indices])
-        
-        freqs_sorted = freqs_cm1[sorted_indices]
-        modes_sorted = modes_cart[sorted_indices]
-        
-        # Diagnostic output
-        if self.verbosity >= 1:
-            n_zero = len(zero_indices)
-            n_imag = len(imag_indices)
-            n_real = len(real_indices)
-            self.log_info([
-                f"\nFrequency analysis summary:\n",
-                f"  Zero frequencies (|ν| < {zero_tol} cm⁻¹):    {n_zero}\n",
-                f"  Imaginary frequencies (ν < -{zero_tol} cm⁻¹): {n_imag}\n",
-                f"  Real frequencies (ν > {zero_tol} cm⁻¹):       {n_real}\n\n",
-            ])
-            
-            if not self._is_linear_molecule() and n_zero >= 6:
-                max_zero_freq = np.max(np.abs(freqs_sorted[:6]))
-                if max_zero_freq > 1.0:
-                    self.log_info([
-                        f"  WARNING: First 6 frequencies not all near zero.\n",
-                        f"           Max |freq| in first 6: {max_zero_freq:.2f} cm⁻¹\n",
-                        f"           This may indicate poor Hessian quality or projection issues.\n\n"
-                    ])
-        
-        return freqs_sorted, modes_sorted
+        return self._compute_mw(hessian_matrix)
 
 
 class NonMWFrequency(FrequencyBase):
@@ -1094,28 +1131,7 @@ class NonMWFrequency(FrequencyBase):
     """
 
     def compute_frequencies(self, hessian_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Diagonalize the Cartesian Hessian without mass-weighting.
-        
-        UNIT CONVENTION:
-            - Input Hessian: Hartree/Angstrom²
-            - Output frequencies: cm⁻¹ (but physically incorrect without masses!)
-        
-        Args:
-            hessian_matrix: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
-        
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (frequencies_cm1, modes_in_cartesian)
-        """
-        evals, evecs = self._eigh(hessian_matrix)
-
-        # This conversion is only valid for mass-weighted systems
-        # Using it here gives incorrect results - use MW method instead!
-        conversion = 2721.1383  # Ha/Angstrom² -> cm⁻¹ (assumes unit mass)
-        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
-
-        modes_cart = evecs.T
-        return freqs_cm1, modes_cart
+        return self._compute_nonmw(hessian_matrix)
 
 
 class BothFrequency(FrequencyBase):
@@ -1124,46 +1140,6 @@ class BothFrequency(FrequencyBase):
     
     Produces both mass-weighted and non-mass-weighted results in one run.
     """
-
-    def _compute_mw(self, hessian: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Build and diagonalize the mass-weighted Hessian.
-        
-        Args:
-            hessian: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
-        
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (frequencies_cm1, modes_in_cartesian)
-        """
-        masses = np.asarray(self.atoms.get_masses())
-        inv_sqrt_m = np.repeat(1.0 / np.sqrt(masses), 3)
-        h_m = hessian * inv_sqrt_m[None, :] * inv_sqrt_m[:, None]
-        h_m = self._project_hessian(h_m)
-        evals, evecs_mw = self._eigh(h_m)
-
-        conversion = 2721.1383  # Ha/Angstrom² + amu -> cm⁻¹
-        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
-        modes_cart = evecs_mw.T * inv_sqrt_m[None, :]
-
-        return freqs_cm1, modes_cart
-
-    def _compute_nonmw(self, hessian: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Diagonalize the Cartesian Hessian without mass-weighting.
-        
-        Args:
-            hessian: Cartesian Hessian (3N, 3N) in Hartree/Angstrom²
-        
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (frequencies_cm1, modes_in_cartesian)
-        """
-        evals, evecs = self._eigh(hessian)
-
-        conversion = 2721.1383  # Ha/Angstrom² -> cm⁻¹ (assumes unit mass)
-        freqs_cm1 = np.sign(evals) * np.sqrt(np.abs(evals)) * conversion
-        modes_cart = evecs.T
-
-        return freqs_cm1, modes_cart
 
     def _write_combined_output(self, mw_freqs: np.ndarray, mw_modes: np.ndarray,
                                mw_thermo: ThermoResults, nonmw_freqs: np.ndarray,
@@ -1179,25 +1155,29 @@ class BothFrequency(FrequencyBase):
             nonmw_modes: Non-mass-weighted normal modes (Cartesian).
             nonmw_thermo: Thermochemistry from non-MW frequencies.
         """
-        with open(self.output, 'w', encoding='utf-8') as f:
-            # Common header
-            self._write_header(f)
+        self.log_info(["\nMASS-WEIGHTED ANALYSIS\n"])
+        self._write_output(mw_freqs, mw_modes, mw_thermo)
+        self.log_info(["\nNON-MASS-WEIGHTED ANALYSIS\n"])
+        self._write_output(nonmw_freqs, nonmw_modes, nonmw_thermo)
 
-            # MW section
-            f.write("\n" + "="*60 + "\n")
-            f.write("MASS-WEIGHTED ANALYSIS\n")
-            f.write("="*60 + "\n")
-            self._write_thermochemistry(f, mw_thermo)
-            self._write_frequencies(f, mw_freqs)
-            self._write_normal_modes(f, mw_freqs, mw_modes)
-
-            # Non-MW section
-            f.write("\n" + "="*60 + "\n")
-            f.write("NON-MASS-WEIGHTED ANALYSIS\n")
-            f.write("="*60 + "\n")
-            self._write_thermochemistry(f, nonmw_thermo)
-            self._write_frequencies(f, nonmw_freqs)
-            self._write_normal_modes(f, nonmw_freqs, nonmw_modes)
+    def run(self, hessian=None) -> None:
+        hessian = self.get_hessian(hessian)
+        self.results = dict(atoms=self.atoms, hessian=hessian)
+        for name, compute in (("mw", self._compute_mw), ("nonmw", self._compute_nonmw)):
+            freqs_cm1, modes_cart = compute(hessian)
+            if self.treat_imag_as_real:
+                tol = float(self._print.imag_tol_cm1)
+                freqs_cm1 = np.where(freqs_cm1 < -tol, freqs_cm1, np.abs(freqs_cm1))
+            thermo = self.compute_thermo(freqs_cm1)
+            self.results[name] = dict(freqs_cm1=freqs_cm1, modes_cart=modes_cart, thermo=thermo)
+        mw, nonmw = self.results["mw"], self.results["nonmw"]
+        self._write_combined_output(mw["freqs_cm1"], mw["modes_cart"], mw["thermo"],
+                                    nonmw["freqs_cm1"], nonmw["modes_cart"], nonmw["thermo"])
+        if self.verbosity == 10:
+            self._write_summary(mw["freqs_cm1"], mw["modes_cart"], mw["thermo"],
+                                title="MASS-WEIGHTED ANALYSIS")
+            self._write_summary(nonmw["freqs_cm1"], nonmw["modes_cart"], nonmw["thermo"],
+                                mode="a", title="NON-MASS-WEIGHTED ANALYSIS")
 
 # ======================================================================
 # Front driver 
@@ -1245,31 +1225,61 @@ class Frequency:
      
   
 
+    def _run_single(self, atoms, output, hessian=None):
+        method = self.params.method.lower()
+
+        common_kwargs = dict(
+            output=output,
+            atoms=atoms,
+            temperature=self.params.temperature,
+            pressure_kpa=self.params.pressure_kpa,
+            ilowfreq=self.params.ilowfreq,
+            device=self.params.device,
+            batch_size=self.params.batch_size
+        )
+
+        if method == "both":
+            job = BothFrequency(**common_kwargs)
+        elif method == "nonmw":
+            job = NonMWFrequency(**common_kwargs)
+        else:  # "mw"
+            job = MWFrequency(**common_kwargs)
+        job.verbosity = int(self.params.verbose)
+        job.treat_imag_as_real = bool(self.params.treat_imag_as_real)
+        # pass print-layer params if available
+        if hasattr(self, "print_params"):
+            job._print = self.print_params
+        job.run(hessian=hessian)
+        return job.results
+
+
     def run(self) -> None:
         with timer("Frequency Calculation"):
-            method = self.params.method.lower()
+            if not isinstance(self.atoms, (list, Molecules)):
+                self.results = self._run_single(self.atoms, self.output)
+                return
+            from collections import OrderedDict
+            from pathlib import Path
+            from ..optimization.algorithm._common import member_outputs
+            from ..md.logger import _backup_file
 
-            common_kwargs = dict(
-                output=self.output,
-                atoms=self.atoms,
-                temperature=self.params.temperature,
-                pressure_kpa=self.params.pressure_kpa,
-                ilowfreq=self.params.ilowfreq,
-                device=self.params.device
-            )
-
-            if method == "both":
-                job = BothFrequency(**common_kwargs)
-            elif method == "nonmw":
-                job = NonMWFrequency(**common_kwargs)
-            else:  # "mw"
-                job = MWFrequency(**common_kwargs)
-            job.verbosity = int(self.params.verbose)
-            job.treat_imag_as_real = bool(self.params.treat_imag_as_real)
-            # pass print-layer params if available
-            if hasattr(self, "print_params"):
-                job._print = self.print_params
-            job.run()
+            atoms_list = self.atoms.multiatoms if isinstance(self.atoms, Molecules) else self.atoms
+            outputs = member_outputs(self.output, atoms_list, ())
+            for output in outputs:
+                _backup_file(Path(os.path.splitext(output)[0] + '.sum'))
+            groups = OrderedDict()
+            for i, atoms in enumerate(atoms_list):
+                groups.setdefault(id(atoms.calc), []).append(i)
+            self.results = [None] * len(atoms_list)
+            with open(self.output, 'a') as file:
+                for indices in groups.values():
+                    members = [atoms_list[i] for i in indices]
+                    result = calculate_batch(members[0].calc, members, ['hessian'], self.params.batch_size)
+                    for i, hessian in zip(indices, result['hessian']):
+                        self.results[i] = self._run_single(atoms_list[i], outputs[i], hessian)
+                        file.write(f'Member {i + 1}: frequency analysis completed; output: {outputs[i]}\n')
+                        file.flush()
+                file.write(f'Frequency analysis completed for {len(atoms_list)} members.\n')
 
 # Public API
 __all__ = [

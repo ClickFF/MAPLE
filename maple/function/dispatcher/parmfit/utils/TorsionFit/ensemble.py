@@ -433,6 +433,26 @@ def _scan_ref_mlip_kcal(scan_data_map, torsion_bond: tuple[int, int]) -> float:
     return float(np.asarray(scan_data.qm_kcal, dtype=float)[int(scan_data.ref_idx)])
 
 
+def _mlip_energies(frames, batch_size):
+    if not frames:
+        return []
+    from maple.function.calculator._batch import calculate_batch, _apply_constraints
+
+    try:
+        output = calculate_batch(frames[0].calc, frames, ["free_energy"], batch_size)
+        return [_apply_constraints(frame, float(energy))[0]
+                for frame, energy in zip(frames, output["free_energy"])]
+    except Exception:
+        # Ensemble screening already discards individual failed candidates.
+        energies = []
+        for frame in frames:
+            try:
+                energies.append(float(get_potential_energy(frame)))
+            except Exception:
+                energies.append(float("nan"))
+        return energies
+
+
 def build_torsion_local_ensemble(
     *,
     atoms: Atoms,
@@ -444,6 +464,7 @@ def build_torsion_local_ensemble(
     mobile_atoms=None,
     log_info=None,
     workflow: str = "torsionfit",
+    batch_size: int | None = None,
 ) -> TorsionEnsembleResult:
     if not params.torsion_ensemble:
         return TorsionEnsembleResult()
@@ -497,14 +518,15 @@ def build_torsion_local_ensemble(
 
         selected_by_center: dict[tuple[int, int], list[tuple[Atoms, float, float, dict[tuple[int, int, int, int], float]]]] = {}
         symbols = atoms.get_chemical_symbols()
+        frames = []
         for center, positions, mm_energy, trial in selected:
             frame = _atoms_from_positions(symbols, positions)
             frame.calc = atoms.calc
             copy_thresholds(atoms, frame)
-            try:
-                mlip_energy = float(get_potential_energy(frame)) * HARTREE_TO_KCAL_MOL
-            except Exception:
-                continue
+            frames.append(frame)
+        mlip_energies = _mlip_energies(frames, batch_size)
+        for (center, _, mm_energy, trial), frame, energy in zip(selected, frames, mlip_energies):
+            mlip_energy = float(energy) * HARTREE_TO_KCAL_MOL
             if not np.isfinite(mlip_energy):
                 continue
             selected_by_center.setdefault(center, []).append((frame, float(mm_energy), mlip_energy, dict(trial)))

@@ -18,6 +18,7 @@ from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._batch import energy_forces_images
 
 from .neb import (
     NEB, NEBParams, LBFGSDriver,
@@ -36,6 +37,8 @@ from maple.function.utility import Molecules
 @dataclass
 class AutoNEBParams:
     """Parameters for AutoNEB algorithm."""
+
+    batch_size: Optional[int] = None
 
     # ===== Basic NEB settings (inherited concept) =====
     n_images: int = 20                     # Initial number of images (excluding endpoints)
@@ -87,6 +90,7 @@ class PathNode:
     path_id: str                           # Unique path identifier
     images: List[Atoms] = field(default_factory=list)  # Current images
     energies: List[float] = field(default_factory=list)  # Energies
+    forces: List[np.ndarray] = field(default_factory=list)
     parent: Optional[str] = None           # Parent path ID
     children: List[str] = field(default_factory=list)  # Child path IDs
     status: str = 'pending'                # 'pending', 'running', 'converged', 'split', 'needs_reopt'
@@ -141,6 +145,8 @@ class AutoNEB(JobABC):
         self.global_iteration = 0
         self.all_intermediates: List[Atoms] = []
         self.all_ts: List[Atoms] = []
+        self.intermediate_energies, self.intermediate_forces = [], []
+        self.ts_energies, self.ts_forces = [], []
 
         # Log parameters
         self._log_params()
@@ -351,7 +357,7 @@ class AutoNEB(JobABC):
 
     def _get_energies(self, images: List[Atoms]) -> List[float]:
         """Get energies for all images."""
-        return [float(at.get_potential_energy(force_consistent=True)) for at in images]
+        return energy_forces_images(images, self.params.batch_size)[0].tolist()
 
     # =========================================================================
     # Single Path Optimization
@@ -378,8 +384,9 @@ class AutoNEB(JobABC):
         driver = node._driver
 
         # Compute energies and forces
-        energies = self._get_energies(images)
-        node.energies = energies
+        energies, raw_forces = energy_forces_images(images, p.batch_size)
+        node.energies = list(energies)
+        node.forces = raw_forces
 
         # Compute NEB forces
         if p.use_dynamic_k:
@@ -391,7 +398,7 @@ class AutoNEB(JobABC):
             images, energies,
             k_spring=None,
             k_springs=k_springs,
-            use_dynamic_k=False
+            use_dynamic_k=False, raw_forces=raw_forces
         )
 
         node.hei_idx = hei_idx
@@ -427,13 +434,14 @@ class AutoNEB(JobABC):
             offset += n
 
         # Compute new gradient for L-BFGS update
-        new_energies = self._get_energies(images)
-        node.energies = new_energies
+        new_energies, new_forces = energy_forces_images(images, p.batch_size)
+        node.energies = list(new_energies)
+        node.forces = new_forces
 
         if p.use_dynamic_k:
             k_springs = compute_dynamic_k(new_energies, p.k_min, p.k_max, p.k_decay)
 
-        new_Fp_list, _, _ = neb_forces(images, new_energies, k_springs=k_springs)
+        new_Fp_list, _, _ = neb_forces(images, new_energies, k_springs=k_springs, raw_forces=new_forces)
 
         new_grads = []
         for i in range(1, len(images) - 1):
@@ -494,7 +502,8 @@ class AutoNEB(JobABC):
 
         # Update node
         node.images = new_images
-        node.energies = self._get_energies(new_images)
+        energies, node.forces = energy_forces_images(new_images, p.batch_size)
+        node.energies = list(energies)
 
         # Reset L-BFGS
         node._driver = None
@@ -552,6 +561,7 @@ class AutoNEB(JobABC):
             path_id=child1_id,
             images=child1_images,
             energies=parent.energies[:split_idx+1],
+            forces=parent.forces[:split_idx+1],
             parent=path_id,
             children=[],
             status='pending',
@@ -567,6 +577,7 @@ class AutoNEB(JobABC):
             path_id=child2_id,
             images=child2_images,
             energies=parent.energies[split_idx:],
+            forces=parent.forces[split_idx:],
             parent=path_id,
             children=[],
             status='pending',
@@ -582,6 +593,8 @@ class AutoNEB(JobABC):
         # Record intermediate
         intermediate = self._copy_atoms_with_calc(parent.images[split_idx])
         self.all_intermediates.append(intermediate)
+        self.intermediate_energies.append(parent.energies[split_idx])
+        self.intermediate_forces.append(parent.forces[split_idx].copy())
 
         log_info([
             f"\n{'='*70}\n",
@@ -671,6 +684,7 @@ class AutoNEB(JobABC):
             new_energies = node.energies[new_idx:]
             node.images = new_images
             node.energies = new_energies
+            node.forces = node.forces[new_idx:]
 
             log_info([
                 f"\n[Path {path_id}] Updated start point to index {new_idx}, "
@@ -687,6 +701,7 @@ class AutoNEB(JobABC):
             new_energies = node.energies[:new_idx+1]
             node.images = new_images
             node.energies = new_energies
+            node.forces = node.forces[:new_idx+1]
 
             log_info([
                 f"\n[Path {path_id}] Updated end point to index {new_idx}, "
@@ -718,14 +733,16 @@ class AutoNEB(JobABC):
             if which_end == 'start' and sib.end_is_shared:
                 # This path's start is sibling's end
                 sib.images[-1] = self._copy_atoms_with_calc(new_point)
-                sib.energies[-1] = float(new_point.get_potential_energy(force_consistent=True))
+                sib.energies[-1] = node.energies[0]
+                sib.forces[-1] = node.forces[0].copy()
                 sib.status = 'needs_reopt'
                 log_info([f"[Path {sib_id}] Marked for re-optimization (shared endpoint updated)\n"], self.output)
 
             elif which_end == 'end' and sib.start_is_shared:
                 # This path's end is sibling's start
                 sib.images[0] = self._copy_atoms_with_calc(new_point)
-                sib.energies[0] = float(new_point.get_potential_energy(force_consistent=True))
+                sib.energies[0] = node.energies[-1]
+                sib.forces[0] = node.forces[-1].copy()
                 sib.status = 'needs_reopt'
                 log_info([f"[Path {sib_id}] Marked for re-optimization (shared endpoint updated)\n"], self.output)
 
@@ -833,7 +850,8 @@ class AutoNEB(JobABC):
         converged = False
         for iteration in range(1, p.final_refine_max_iter + 1):
             # Get current energies
-            energies = self._get_energies(ref_images)
+            energies, raw_forces = energy_forces_images(ref_images, p.batch_size)
+            energies = list(energies)
             n_images = len(ref_images)
 
             # Compute spring constants
@@ -846,7 +864,7 @@ class AutoNEB(JobABC):
             Fp_list, maxfp, hei_idx = neb_forces(
                 ref_images, energies,
                 k_springs=k_springs,
-                use_dynamic_k=False
+                use_dynamic_k=False, raw_forces=raw_forces
             )
             rmsfp = rms_force(Fp_list)
 
@@ -892,12 +910,13 @@ class AutoNEB(JobABC):
                 offset += n_atoms_3
 
             # Compute new gradient for L-BFGS update
-            new_energies = self._get_energies(ref_images)
+            new_energies, new_forces = energy_forces_images(ref_images, p.batch_size)
+            new_energies = list(new_energies)
 
             if p.use_dynamic_k:
                 k_springs = compute_dynamic_k(new_energies, p.k_min, p.k_max, p.k_decay)
 
-            new_Fp_list, _, _ = neb_forces(ref_images, new_energies, k_springs=k_springs)
+            new_Fp_list, _, _ = neb_forces(ref_images, new_energies, k_springs=k_springs, raw_forces=new_forces)
 
             new_grads = []
             for i in range(1, n_images - 1):
@@ -984,6 +1003,7 @@ class AutoNEB(JobABC):
     def _collect_all_ts(self):
         """Collect all transition states from converged paths."""
         self.all_ts = []
+        self.ts_energies, self.ts_forces = [], []
 
         def collect_from_path(path_id: str):
             node = self.path_tree[path_id]
@@ -992,6 +1012,8 @@ class AutoNEB(JobABC):
                     collect_from_path(c)
             elif node.status == 'converged' and node.hei_idx > 0:
                 self.all_ts.append(self._copy_atoms_with_calc(node.images[node.hei_idx]))
+                self.ts_energies.append(node.energies[node.hei_idx])
+                self.ts_forces.append(node.forces[node.hei_idx])
 
         collect_from_path(self.root_path_id)
 
@@ -1008,16 +1030,15 @@ class AutoNEB(JobABC):
 
         ext = ".pdb" if global_images and global_images[0].info.get("pdb_template") else ".xyz"
         mep_file = base + "_autoneb_global_mep" + ext
-        write_xyz(mep_file, global_images, energies=global_energies)
+        write_xyz(mep_file, global_images, energies=global_energies, forces=self.final_forces)
         log_info([f"\nWrote global MEP to: {mep_file}\n"], self.output)
 
         # Intermediates
         if self.all_intermediates:
             ext = ".pdb" if self.all_intermediates[0].info.get("pdb_template") else ".xyz"
             int_file = base + "_autoneb_intermediates" + ext
-            int_energies = [float(at.get_potential_energy(force_consistent=True))
-                          for at in self.all_intermediates]
-            write_xyz(int_file, self.all_intermediates, energies=int_energies)
+            write_xyz(int_file, self.all_intermediates, energies=self.intermediate_energies,
+                      forces=self.intermediate_forces)
             log_info([f"Wrote intermediates to: {int_file}\n"], self.output)
 
         # Transition states
@@ -1025,9 +1046,7 @@ class AutoNEB(JobABC):
         if self.all_ts:
             ext = ".pdb" if self.all_ts[0].info.get("pdb_template") else ".xyz"
             ts_file = base + "_autoneb_ts_list" + ext
-            ts_energies = [float(at.get_potential_energy(force_consistent=True))
-                         for at in self.all_ts]
-            write_xyz(ts_file, self.all_ts, energies=ts_energies)
+            write_xyz(ts_file, self.all_ts, energies=self.ts_energies, forces=self.ts_forces)
             log_info([f"Wrote transition states to: {ts_file}\n"], self.output)
 
         # Path tree (JSON for debugging)
@@ -1056,7 +1075,7 @@ class AutoNEB(JobABC):
             elif node.status == 'converged':
                 ext = ".pdb" if node.images and node.images[0].info.get("pdb_template") else ".xyz"
                 path_file = base + f"_autoneb_path_{path_id}_mep" + ext
-                write_xyz(path_file, node.images, energies=node.energies)
+                write_xyz(path_file, node.images, energies=node.energies, forces=node.forces)
 
         write_path_meps(self.root_path_id)
 
@@ -1135,7 +1154,7 @@ class AutoNEB(JobABC):
                 else:
                     k_springs = [p.k_max] * len(node.images)
 
-                Fp_list, maxfp, _ = neb_forces(node.images, energies, k_springs=k_springs)
+                Fp_list, maxfp, _ = neb_forces(node.images, energies, k_springs=k_springs, raw_forces=node.forces)
                 rmsfp = rms_force(Fp_list)
                 dE = energies[hei] - energies[0]
 
@@ -1200,7 +1219,11 @@ class AutoNEB(JobABC):
 
         # Store final results for output
         self.final_images = global_images
-        self.final_energies = global_energies
+        self.final_energies, self.final_forces = energy_forces_images(global_images, p.batch_size)
+        self.results = {"images": global_images, "energy": self.final_energies,
+                        "forces": self.final_forces, "iterations": self.global_iteration,
+                        "converged": all(node.status in ("converged", "split")
+                                         for node in self.path_tree.values())}
 
         self._write_outputs()
 
@@ -1212,3 +1235,5 @@ class AutoNEB(JobABC):
             f"  Energy range: {min(global_energies):.6f} to {max(global_energies):.6f} Eh\n",
             f"  Overall barrier: {(max(global_energies) - global_energies[0]) * kcal:.2f} kcal/mol\n",
         ], self.output)
+
+        return global_images

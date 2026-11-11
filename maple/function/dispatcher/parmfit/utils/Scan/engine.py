@@ -180,30 +180,25 @@ class SilentScanEngine:
         params["opt"] = opt
         return params
 
+    def _build_optimizer(self, atoms: Atoms, *, use_projection=False):
+        params = self._build_optimizer_params(use_projection=use_projection)
+        if self.backend == "lbfgs":
+            return LBFGS(atoms, output=self.output, paras=params)
+        if self.backend == "cgws":
+            return CGWS(atoms, output=self.output, paras=params)
+        return CGBS(atoms, output=self.output, paras=params)
+
     def _run_fixinternals_optimizer(self, atoms: Atoms) -> Atoms:
         if self.mode == "rigid":
             return atoms
-        params = self._build_optimizer_params()
-        if self.backend == "lbfgs":
-            optimizer = LBFGS(atoms, output=self.output, paras=params)
-        elif self.backend == "cgws":
-            optimizer = CGWS(atoms, output=self.output, paras=params)
-        else:
-            optimizer = CGBS(atoms, output=self.output, paras=params)
-        return optimizer.run()
+        return self._build_optimizer(atoms).run()
 
     def _run_projected_optimizer(self, atoms: Atoms) -> Atoms:
-        params = self._build_optimizer_params(use_projection=True)
-        if self.backend == "lbfgs":
-            optimizer = LBFGS(atoms, output=self.output, paras=params)
-        elif self.backend == "cgws":
-            optimizer = CGWS(atoms, output=self.output, paras=params)
-        else:
-            optimizer = CGBS(atoms, output=self.output, paras=params)
-        return optimizer.run()
+        return self._build_optimizer(atoms, use_projection=True).run()
 
-    def _record_result(self, atoms: Atoms, coord: list[float], coords_list: list, energies: list) -> None:
-        energy = float(atoms.get_potential_energy(force_consistent=True))
+    def _record_result(self, atoms: Atoms, coord: list[float], coords_list: list, energies: list, *, energy=None) -> None:
+        if energy is None:
+            energy = float(atoms.get_potential_energy(force_consistent=True))
         positions = atoms.get_positions()
         symbols = atoms.get_chemical_symbols()
 
@@ -226,23 +221,99 @@ class SilentScanEngine:
             info.append(f"\n\nEnergy:                {energy:>12.6f}\n")
             self._log_info(info)
 
+    def _iter_scan_points(self, scan_values, prepare_node):
+        if len(scan_values) == 1:
+            x_values = scan_values[0]
+            atoms_current = self._safe_copy(self.atoms)
+            for value in x_values:
+                coord = [value]
+                self._current_index += 1
+                self._print_progress(self._current_index, self._total_combinations, coord)
+                atoms_current = prepare_node(atoms_current, coord)
+                atoms_current = yield atoms_current, coord
+            return
+        elif len(scan_values) == 2:
+            x_values, y_values = scan_values[0], scan_values[1]
+            grid_xy = {}
+
+            atoms_current = self._safe_copy(self.atoms)
+            for ix, xv in enumerate(x_values):
+                coord = [xv, y_values[0]]
+                self._current_index += 1
+                self._print_progress(self._current_index, self._total_combinations, coord)
+                atoms_current = prepare_node(atoms_current, coord)
+                atoms_current = yield atoms_current, coord
+                grid_xy[(ix, 0)] = self._safe_copy(atoms_current)
+
+            for ix, xv in enumerate(x_values):
+                atoms_current = self._safe_copy(grid_xy[(ix, 0)])
+                for iy in range(1, len(y_values)):
+                    coord = [xv, y_values[iy]]
+                    self._current_index += 1
+                    self._print_progress(self._current_index, self._total_combinations, coord)
+                    atoms_current = prepare_node(atoms_current, coord)
+                    atoms_current = yield atoms_current, coord
+            return
+        elif len(scan_values) == 3:
+            x_values, y_values, z_values = scan_values[0], scan_values[1], scan_values[2]
+            grid_xy = {}
+
+            atoms_current = self._safe_copy(self.atoms)
+            for ix, xv in enumerate(x_values):
+                coord = [xv, y_values[0], z_values[0]]
+                self._current_index += 1
+                self._print_progress(self._current_index, self._total_combinations, coord)
+                atoms_current = prepare_node(atoms_current, coord)
+                atoms_current = yield atoms_current, coord
+                grid_xy[(ix, 0)] = self._safe_copy(atoms_current)
+
+            for ix, xv in enumerate(x_values):
+                atoms_current = self._safe_copy(grid_xy[(ix, 0)])
+                for iy in range(1, len(y_values)):
+                    coord = [xv, y_values[iy], z_values[0]]
+                    self._current_index += 1
+                    self._print_progress(self._current_index, self._total_combinations, coord)
+                    atoms_current = prepare_node(atoms_current, coord)
+                    atoms_current = yield atoms_current, coord
+                    grid_xy[(ix, iy)] = self._safe_copy(atoms_current)
+
+            for ix, xv in enumerate(x_values):
+                for iy, yv in enumerate(y_values):
+                    atoms_current = self._safe_copy(grid_xy[(ix, iy)])
+                    for iz, zv in enumerate(z_values):
+                        if iz == 0:
+                            continue
+                        coord = [xv, yv, zv]
+                        self._current_index += 1
+                        self._print_progress(self._current_index, self._total_combinations, coord)
+                        atoms_current = prepare_node(atoms_current, coord)
+                        atoms_current = yield atoms_current, coord
+                    del grid_xy[(ix, iy)]
+            return
+        else:
+            raise ValueError(f"Only 1D, 2D, 3D scans are supported, got {len(scan_values)}D")
+
+    def _run_scan_points(self, scan_values, prepare_node, relax_node):
+        coords_list, energies = [], []
+        points = self._iter_scan_points(scan_values, prepare_node)
+        try:
+            atoms_current, coord = next(points)
+            while True:
+                atoms_current = relax_node(atoms_current)
+                self._record_result(atoms_current, coord, coords_list, energies)
+                atoms_current, coord = points.send(atoms_current)
+        except StopIteration:
+            return coords_list, energies
+        finally:
+            points.close()
+
     def _scan_1d(
         self,
         scan_values: list[list[float]],
         prepare_node: Callable[[Atoms, list[float]], Atoms],
         relax_node: Callable[[Atoms], Atoms],
     ) -> tuple[list, list]:
-        x_values = scan_values[0]
-        coords_list, energies = [], []
-        atoms_current = self._safe_copy(self.atoms)
-        for value in x_values:
-            coord = [value]
-            self._current_index += 1
-            self._print_progress(self._current_index, self._total_combinations, coord)
-            atoms_current = prepare_node(atoms_current, coord)
-            atoms_current = relax_node(atoms_current)
-            self._record_result(atoms_current, coord, coords_list, energies)
-        return coords_list, energies
+        return self._run_scan_points(scan_values, prepare_node, relax_node)
 
     def _scan_2d(
         self,
@@ -250,30 +321,7 @@ class SilentScanEngine:
         prepare_node: Callable[[Atoms, list[float]], Atoms],
         relax_node: Callable[[Atoms], Atoms],
     ) -> tuple[list, list]:
-        x_values, y_values = scan_values[0], scan_values[1]
-        coords_list, energies = [], []
-        grid_xy = {}
-
-        atoms_current = self._safe_copy(self.atoms)
-        for ix, xv in enumerate(x_values):
-            coord = [xv, y_values[0]]
-            self._current_index += 1
-            self._print_progress(self._current_index, self._total_combinations, coord)
-            atoms_current = prepare_node(atoms_current, coord)
-            atoms_current = relax_node(atoms_current)
-            grid_xy[(ix, 0)] = self._safe_copy(atoms_current)
-            self._record_result(atoms_current, coord, coords_list, energies)
-
-        for ix, xv in enumerate(x_values):
-            atoms_current = self._safe_copy(grid_xy[(ix, 0)])
-            for iy in range(1, len(y_values)):
-                coord = [xv, y_values[iy]]
-                self._current_index += 1
-                self._print_progress(self._current_index, self._total_combinations, coord)
-                atoms_current = prepare_node(atoms_current, coord)
-                atoms_current = relax_node(atoms_current)
-                self._record_result(atoms_current, coord, coords_list, energies)
-        return coords_list, energies
+        return self._run_scan_points(scan_values, prepare_node, relax_node)
 
     def _scan_3d(
         self,
@@ -281,48 +329,35 @@ class SilentScanEngine:
         prepare_node: Callable[[Atoms, list[float]], Atoms],
         relax_node: Callable[[Atoms], Atoms],
     ) -> tuple[list, list]:
-        x_values, y_values, z_values = scan_values[0], scan_values[1], scan_values[2]
-        coords_list, energies = [], []
-        grid_xy = {}
-
-        atoms_current = self._safe_copy(self.atoms)
-        for ix, xv in enumerate(x_values):
-            coord = [xv, y_values[0], z_values[0]]
-            self._current_index += 1
-            self._print_progress(self._current_index, self._total_combinations, coord)
-            atoms_current = prepare_node(atoms_current, coord)
-            atoms_current = relax_node(atoms_current)
-            grid_xy[(ix, 0)] = self._safe_copy(atoms_current)
-            self._record_result(atoms_current, coord, coords_list, energies)
-
-        for ix, xv in enumerate(x_values):
-            atoms_current = self._safe_copy(grid_xy[(ix, 0)])
-            for iy in range(1, len(y_values)):
-                coord = [xv, y_values[iy], z_values[0]]
-                self._current_index += 1
-                self._print_progress(self._current_index, self._total_combinations, coord)
-                atoms_current = prepare_node(atoms_current, coord)
-                atoms_current = relax_node(atoms_current)
-                grid_xy[(ix, iy)] = self._safe_copy(atoms_current)
-                self._record_result(atoms_current, coord, coords_list, energies)
-
-        for ix, xv in enumerate(x_values):
-            for iy, yv in enumerate(y_values):
-                atoms_current = self._safe_copy(grid_xy[(ix, iy)])
-                for iz, zv in enumerate(z_values):
-                    if iz == 0:
-                        continue
-                    coord = [xv, yv, zv]
-                    self._current_index += 1
-                    self._print_progress(self._current_index, self._total_combinations, coord)
-                    atoms_current = prepare_node(atoms_current, coord)
-                    atoms_current = relax_node(atoms_current)
-                    self._record_result(atoms_current, coord, coords_list, energies)
-                del grid_xy[(ix, iy)]
-        return coords_list, energies
+        return self._run_scan_points(scan_values, prepare_node, relax_node)
 
     def _identity_relax(self, atoms: Atoms) -> Atoms:
         return atoms
+
+    def _prepare_scan(self, scan_values):
+        self._total_combinations = 1
+        for values in scan_values:
+            self._total_combinations *= len(values)
+        self._current_index = 0
+        base, _ = os.path.splitext(self.output)
+        xyz_filename = base + "_scan_final.xyz"
+        with open(self.output, "w", encoding="utf-8"):
+            pass
+        self.xyz_file = open(xyz_filename, "w", encoding="utf-8")
+        return xyz_filename
+
+    def _finish_scan(self, xyz_filename, energies):
+        self._log_info("\n")
+        self._log_info("=" * 70)
+        self._log_info(f"\nScan completed! Total points: {len(energies)}")
+        self._log_info(f"Results saved to: {xyz_filename}\n")
+        self._log_info(f"Energy range: {min(energies):.6f} to {max(energies):.6f} eV\n")
+
+    def _close_scan(self):
+        if self.xyz_file is not None:
+            self.xyz_file.close()
+            self.xyz_file = None
+        self._cleanup_opt_files(self.output)
 
     def _run_internal_scan(
         self,
@@ -332,17 +367,8 @@ class SilentScanEngine:
         relax_node: Callable[[Atoms], Atoms],
     ) -> str:
         dim = len(scan_values)
-        self._total_combinations = 1
-        for values in scan_values:
-            self._total_combinations *= len(values)
-        self._current_index = 0
-
-        base, _ = os.path.splitext(self.output)
-        xyz_filename = base + "_scan_final.xyz"
-        with open(self.output, "w", encoding="utf-8"):
-            pass
+        xyz_filename = self._prepare_scan(scan_values)
         try:
-            self.xyz_file = open(xyz_filename, "w", encoding="utf-8")
             if dim == 1:
                 _, energies = self._scan_1d(scan_values, prepare_node, relax_node)
             elif dim == 2:
@@ -351,16 +377,9 @@ class SilentScanEngine:
                 _, energies = self._scan_3d(scan_values, prepare_node, relax_node)
             else:
                 raise ValueError(f"Only 1D, 2D, 3D scans are supported, got {dim}D")
-            self._log_info("\n")
-            self._log_info("=" * 70)
-            self._log_info(f"\nScan completed! Total points: {len(energies)}")
-            self._log_info(f"Results saved to: {xyz_filename}\n")
-            self._log_info(f"Energy range: {min(energies):.6f} to {max(energies):.6f} eV\n")
+            self._finish_scan(xyz_filename, energies)
         finally:
-            if self.xyz_file is not None:
-                self.xyz_file.close()
-                self.xyz_file = None
-            self._cleanup_opt_files(self.output)
+            self._close_scan()
         return xyz_filename
 
     def _run_fixinternals_scan(self) -> str:

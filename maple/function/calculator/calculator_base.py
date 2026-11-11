@@ -123,21 +123,36 @@ def parse_bool_option(value, *, name='option'):
 EV2HARTREE = 1.0 / 27.211386245988
 
 
-def _convert_energy_force_units(energy, forces, *, source_unit):
-    """Convert backend (energy, forces) to Hartree and Hartree/Å.
+def _convert_properties(result, *, source_unit):
+    """Convert native properties to Hartree/Å conventions; stress stays eV/Å³.
 
-    Backends declare MODEL_ENERGY_UNIT honestly. Hartree is a no-op; eV
-    multiplies through by EV2HARTREE.
+    Multiplication preserves array/Tensor dtype, device and derivative graphs.
+    Neither the input dictionary nor its values are modified.
     """
-    if source_unit == 'hartree':
-        return energy, forces
+    if source_unit not in ('eV', 'hartree'):
+        raise ValueError(
+            f"Unknown source_unit: {source_unit!r}; expected 'eV' or 'hartree'."
+        )
+    converted = dict(result)
     if source_unit == 'eV':
-        energy_ha = energy * EV2HARTREE
-        forces_ha = forces * EV2HARTREE if forces is not None else None
-        return energy_ha, forces_ha
-    raise ValueError(
-        f"Unknown source_unit: {source_unit!r}; expected 'eV' or 'hartree'."
-    )
+        def convert(value):
+            if isinstance(value, (list, tuple)):
+                return type(value)(convert(item) for item in value)
+            return value * EV2HARTREE
+
+        for name in ('energy', 'free_energy', 'forces', 'hessian', 'hvp', 'virial'):
+            value = result.get(name)
+            if value is not None:
+                converted[name] = convert(value)
+    elif result.get('stress') is not None:
+        converted['stress'] = result['stress'] / EV2HARTREE
+    return converted
+
+
+def _convert_energy_force_units(energy, forces, *, source_unit):
+    """Convert backend (energy, forces) to Hartree and Hartree/Å."""
+    result = _convert_properties({'energy': energy, 'forces': forces}, source_unit=source_unit)
+    return result['energy'], result['forces']
 
 
 def init_implicit_solvent(calc, implicit, solvent, device):
@@ -171,67 +186,9 @@ def reject_periodic_atoms(atoms, backend_name: str) -> None:
 
 
 def numerical_hessian_from_atoms(calc, atoms, delta=0.002):
-    """Numerical Hessian via central finite difference on forces.
-
-    Polymorphic: works for any calculator with the ASE protocol
-    (calc.calculate(atoms, properties=['forces'], system_changes=...) writes
-    calc.results['forces'] as a (N, 3) ndarray). Returns float64 ndarray of
-    shape (3N, 3N).
-    """
-    from ase.constraints import FixAtoms
-    from ase.calculators.calculator import all_changes
-
-    old_results = dict(getattr(calc, 'results', {}) or {})
-    old_atoms = getattr(calc, 'atoms', None)
-    try:
-        N = len(atoms)
-        pos0 = atoms.get_positions().copy()
-        fixed = {
-            i
-            for c in getattr(atoms, 'constraints', []) or []
-            if isinstance(c, FixAtoms)
-            for i in c.get_indices()
-        }
-        movable = [i for i in range(N) if i not in fixed]
-
-        H = np.zeros((3 * N, 3 * N), dtype=np.float64)
-        if not movable:
-            return H
-
-        def force_at(positions):
-            at = atoms.copy()
-            at.set_positions(positions)
-            if getattr(atoms, 'constraints', None):
-                at.set_constraint(atoms.constraints)
-            calc.calculate(at, properties=['forces'], system_changes=all_changes)
-            return np.asarray(calc.results['forces'], dtype=np.float64)
-
-        for a in movable:
-            for k in range(3):
-                # Displacing DOF j and measuring all forces yields -dF_i/dx_j = H[i, j],
-                # i.e. column j of the Hessian. Fill the column, then symmetrize to
-                # absorb finite-difference noise (the exact Hessian is symmetric).
-                col = 3 * a + k
-                pos_p = pos0.copy(); pos_p[a, k] += delta
-                Fp = force_at(pos_p)
-                pos_m = pos0.copy(); pos_m[a, k] -= delta
-                Fm = force_at(pos_m)
-                H[:, col] = (-(Fp - Fm) / (2.0 * delta)).reshape(-1)
-
-        H = 0.5 * (H + H.T)
-        if fixed:
-            # PHVA embedding: a frozen atom contributes no Hessian row/column.
-            # Symmetrization would otherwise smear the movable->fixed force
-            # couplings (read from the raw, unconstrained results['forces']) into
-            # the fixed DOFs; zero them so fixed atoms decouple cleanly. No-op when
-            # there are no constraints, so the common path is unchanged.
-            fixed_dofs = [3 * i + k for i in sorted(fixed) for k in range(3)]
-            H[fixed_dofs, :] = 0.0
-            H[:, fixed_dofs] = 0.0
-        return H
-    finally:
-        calc.results = old_results
-        calc.atoms = old_atoms
+    """Central force differences using MAPLE batch or plain ASE evaluation."""
+    from ._batch import numerical_hessian
+    return numerical_hessian(calc, atoms, delta)
 
 
 def hessian_via_double_autograd(energy_fn, leaf):
@@ -260,7 +217,17 @@ def hessian_via_double_autograd(energy_fn, leaf):
 
 
 def _property_list(properties):
-    return ['energy'] if properties is None else properties
+    return ['energy'] if properties is None else ([properties] if isinstance(properties, str) else list(properties))
+
+
+def _state_value(value):
+    if isinstance(value, np.ndarray):
+        return (value.shape, value.dtype.str, value.tobytes())
+    if isinstance(value, dict):
+        return tuple((key, _state_value(item)) for key, item in sorted(value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_state_value(item) for item in value)
+    return value if isinstance(value, (str, int, float, bool, type(None))) else str(value)
 
 
 class CalcABC(ase.calculators.calculator.Calculator):
@@ -275,13 +242,47 @@ class CalcABC(ase.calculators.calculator.Calculator):
     # None keeps legacy/plugins permissive. Shipped backends set an explicit
     # tuple so input typos fail before a model is loaded.
     OPTION_KEYS: tuple | None = None
-    # Constructor kwarg that accepts an explicit user model_path, if any.
-    MODEL_PATH_OPTION: str | None = None
 
     def __init__(self):
         super().__init__()
+        self._input_state = None
+
+    def _calculation_state(self, atoms):
+        info = getattr(atoms, 'info', {})
+        arrays = getattr(atoms, 'arrays', {})
+        keys = ('charge', 'total_charge', 'mult', 'multiplicity', 'external_field', 'external_potential')
+        config = ('device', 'dtype', 'lr', 'lr_cutoff', 'hessian', 'd4', 'implicit', 'solvent')
+        return _state_value(([(key, info.get(key)) for key in keys],
+                             [(key, arrays.get(key)) for key in ('external_field', 'external_potential')],
+                             [(key, getattr(self, key, None)) for key in config]))
+
+    def check_state(self, atoms, tol=1e-15):
+        changes = super().check_state(atoms, tol=tol)
+        if self._input_state != self._calculation_state(atoms):
+            changes.append('calculation_context')
+        return changes
+
+    def calculate_batch(self, atoms_list, properties=None, batch_size=None):
+        from ._batch import calculate_batch
+        return calculate_batch(self, atoms_list, properties, batch_size)
+
+    def _calculate_batch(self, atoms_list, properties):
+        return NotImplemented
+
+    def _batch_key(self, atoms):
+        return ()
+
+    def _store_properties(self, atoms, result):
+        self._finalize_results(atoms, energy=result['energy'][0],
+                               forces=result.get('forces', [None])[0],
+                               hessian=result.get('hessian', [None])[0], unit='hartree')
+        for name, values in result.items():
+            if name not in {'energy', 'forces', 'hessian'}:
+                self.results[name] = values[0]
 
     def _reject_unsupported_pbc(self, atoms) -> None:
+        if getattr(self, 'solvent_correction', None) is not None and atoms_has_pbc(atoms):
+            raise ValueError('Implicit GBSA/QEq solvent correction has no periodic implementation')
         if not self.SUPPORTS_PBC:
             reject_periodic_atoms(atoms, type(self).__name__)
 
@@ -291,7 +292,8 @@ class CalcABC(ase.calculators.calculator.Calculator):
 
     @staticmethod
     def _total_charge_from_atoms(atoms) -> float:
-        charge = getattr(atoms, "info", {}).get("charge", None)
+        info = getattr(atoms, 'info', {})
+        charge = info.get('total_charge', info.get('charge'))
         if charge is not None:
             return float(charge)
 
@@ -308,11 +310,36 @@ class CalcABC(ase.calculators.calculator.Calculator):
         properties=None,
         system_changes=ase.calculators.calculator.all_changes,
     ):
+        """Evaluate one ASE request and store its results through the shared lifecycle."""
+        properties = self._normalize_properties(properties)
         target_atoms = atoms if atoms is not None else getattr(self, 'atoms', None)
+        # A failed direct request must never leave a prior geometry/state's
+        # results attached to ASE's newly copied atoms.
+        self.results = {}
         self._reject_unsupported_pbc(target_atoms)
         properties = reject_implicit_solvent_derivatives(self, properties)
+        unknown = set(properties) - set(self.implemented_properties)
+        if unknown:
+            raise ase.calculators.calculator.PropertyNotImplementedError(
+                f'Unsupported calculator properties: {sorted(unknown)}')
+        if system_changes is None:
+            system_changes = ase.calculators.calculator.all_changes
         super().calculate(atoms, properties, system_changes)
-        return target_atoms
+        self._input_state = self._calculation_state(target_atoms)
+        evaluate = getattr(self, '_calculate', None)
+        if evaluate is None:
+            # Legacy calculators call super() before performing their own evaluation.
+            return target_atoms
+        requested = ['energy' if name == 'free_energy' else name for name in properties]
+        requested = list(dict.fromkeys(['energy', *requested]))
+        numerical = ('hessian' in requested and
+                     getattr(self, 'hessian', self.SUPPORTED_HESSIAN_MODES[0]) == 'numerical')
+        if numerical:
+            requested.remove('hessian')
+        result = evaluate([target_atoms], requested)
+        if numerical:
+            result['hessian'] = [self.get_hessian(target_atoms)]
+        self._store_properties(target_atoms, result)
 
     @classmethod
     def build_kwargs_from_options(cls, model, model_options, *, resolved_model_path=None):
@@ -354,16 +381,17 @@ class CalcABC(ase.calculators.calculator.Calculator):
 
     def get_hessian(self, atoms, delta: float = 0.002):
         """Dispatch on self.hessian. Subclasses may override for backend autograd."""
-        self._reject_unsupported_pbc(atoms)
         mode = getattr(self, 'hessian', self.SUPPORTED_HESSIAN_MODES[0])
         if mode == 'analytic':
+            self._reject_unsupported_pbc(atoms)
             if getattr(self, 'solvent_correction', None) is not None:
                 raise NotImplementedError(IMPLICIT_SOLVENT_FORCE_ERROR)
             return np.asarray(self._analytic_hessian(atoms))
         if mode == 'numerical':
             if getattr(self, 'solvent_correction', None) is not None:
                 raise NotImplementedError(IMPLICIT_SOLVENT_FORCE_ERROR)
-            return numerical_hessian_from_atoms(self, atoms, delta)
+            from ._batch import numerical_hessian
+            return numerical_hessian(self, atoms, delta)
         raise ValueError(f"Unknown hessian mode: {mode!r}")
 
     def _analytic_hessian(self, atoms):

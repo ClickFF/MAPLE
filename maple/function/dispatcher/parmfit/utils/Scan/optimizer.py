@@ -190,6 +190,19 @@ def get_energy_and_forces(
     return energy, forces
 
 
+def _run_steps(steps):
+    """Drive the same numerical iteration with scalar calculator getters."""
+    try:
+        atoms, constraints, use_projection = next(steps)
+        while True:
+            values = get_energy_and_forces(atoms, constraints, use_projection=use_projection)
+            atoms, constraints, use_projection = steps.send(values)
+    except StopIteration as done:
+        return done.value
+    finally:
+        steps.close()
+
+
 def _get_potential_energy(atoms: Atoms) -> float:
     if hasattr(atoms, "get_potential_energy"):
         try:
@@ -243,6 +256,23 @@ def wolfe_line_search(
         stpmax=stpmax,
         max_iter=max_iter,
     )
+
+
+def _iter_wolfe_line_search(
+    batch, atoms, direction, energy0, forces0, constraints, *, use_projection,
+    max_step, alpha0=0.5, c1=1.0e-4, c2=0.49, stpmax=10.0, max_iter=24,
+):
+    if not batch:
+        return strong_wolfe_line_search(
+            atoms, direction, energy0, forces0, constraints,
+            use_projection=use_projection, max_step=max_step, alpha0=alpha0,
+            c1=c1, c2=c2, stpmax=stpmax, max_iter=max_iter,
+        )
+    return (yield from _TorchStyleLineSearch(xtol=1.0e-14)._iterate(
+        atoms, direction, energy0, forces0, constraints,
+        use_projection=use_projection, max_step=max_step, alpha0=alpha0,
+        c1=c1, c2=c2, stpmax=stpmax, max_iter=max_iter,
+    ))
 
 
 strong_wolfe_line_search = wolfe_line_search
@@ -364,18 +394,6 @@ def _project_torsion_forces(
     return force_local @ frame
 
 
-def _line_state(
-    atoms: Atoms,
-    origin: np.ndarray,
-    alpha: float,
-    direction: np.ndarray,
-    constraints: ConstraintSet,
-    use_projection: bool,
-) -> tuple[float, np.ndarray]:
-    atoms.set_positions(origin + alpha * direction)
-    return get_energy_and_forces(atoms, constraints, use_projection=use_projection)
-
-
 class _TorchStyleLineSearch:
     def __init__(self, xtol: float = 1.0e-14) -> None:
         self.xtol = float(xtol)
@@ -411,6 +429,28 @@ class _TorchStyleLineSearch:
         stpmax: float,
         max_iter: int,
     ) -> tuple[float | None, float, np.ndarray]:
+        return _run_steps(self._iterate(
+            atoms, direction, energy0, forces0, constraints,
+            use_projection=use_projection, max_step=max_step, alpha0=alpha0,
+            c1=c1, c2=c2, stpmax=stpmax, max_iter=max_iter,
+        ))
+
+    def _iterate(
+        self,
+        atoms: Atoms,
+        direction: np.ndarray,
+        energy0: float,
+        forces0: np.ndarray,
+        constraints: ConstraintSet,
+        *,
+        use_projection: bool,
+        max_step: float,
+        alpha0: float,
+        c1: float,
+        c2: float,
+        stpmax: float,
+        max_iter: int,
+    ):
         origin = np.asarray(atoms.get_positions(), dtype=float).copy()
         self.task = "START"
         self.fc = 0
@@ -440,7 +480,8 @@ class _TorchStyleLineSearch:
                 stp = self.step(alpha, phi, derphi, c1, c2)
                 if self.task.startswith("FG"):
                     alpha = float(stp)
-                    phi, force = _line_state(atoms, origin, alpha, direction, constraints, use_projection)
+                    atoms.set_positions(origin + alpha * direction)
+                    phi, force = yield atoms, constraints, use_projection
                     last_phi = phi
                     last_force = force
                     derphi = -float(np.dot(force.reshape(-1), self.pk))
@@ -845,17 +886,17 @@ class LBFGS(JobABC):
         )
 
     def run(self) -> Atoms:
+        return _run_steps(self._iterate())[0]
+
+    def _iterate(self, *, batch=False):
+        """Yield E/F requests while retaining the original numerical loop."""
         base, _ = os.path.splitext(self.output)
         traj_file = base + "_opt_traj.xyz"
         final_traj_file = base + "_traj.xyz"
 
         atoms = self.atoms
         positions = np.asarray(atoms.get_positions(), dtype=float)
-        energy, forces = get_energy_and_forces(
-            atoms,
-            self.constraints,
-            use_projection=self.params.use_projection,
-        )
+        energy, forces = yield atoms, self.constraints, self.params.use_projection
 
         traj_atoms_list: list[Atoms] = [atoms.copy()]
         traj_energies_list: list[float] = [energy]
@@ -869,7 +910,8 @@ class LBFGS(JobABC):
             direction = self._apply_direction_projection(positions, direction)
 
             if self.params.use_line_search:
-                alpha, _, _ = strong_wolfe_line_search(
+                alpha, _, _ = yield from _iter_wolfe_line_search(
+                    batch,
                     atoms,
                     direction,
                     energy,
@@ -897,11 +939,7 @@ class LBFGS(JobABC):
 
             atoms.set_positions(positions + step)
             positions = np.asarray(atoms.get_positions(), dtype=float)
-            energy, forces = get_energy_and_forces(
-                atoms,
-                self.constraints,
-                use_projection=self.params.use_projection,
-            )
+            energy, forces = yield atoms, self.constraints, self.params.use_projection
             self._update_history((positions - positions_old).reshape(-1), (-forces - (-forces_old)).reshape(-1))
             iteration += 1
 
@@ -926,7 +964,7 @@ class LBFGS(JobABC):
                     final_traj_file=final_traj_file,
                     opt_file=base + "_opt.xyz",
                 )
-                return atoms
+                return atoms, energy, forces, iteration, True
 
         self.converged = False
         self._write_finish_message(
@@ -939,7 +977,7 @@ class LBFGS(JobABC):
             final_traj_file=final_traj_file,
             opt_file=base + "_opt.xyz",
         )
-        return atoms
+        return atoms, energy, forces, iteration, False
 
     def _write_finish_message(
         self,
@@ -1074,13 +1112,17 @@ class CGWS(JobABC):
         )
 
     def run(self) -> Atoms:
+        return _run_steps(self._iterate())[0]
+
+    def _iterate(self, *, batch=False):
+        """Yield E/F requests while retaining the original numerical loop."""
         base, _ = os.path.splitext(self.output)
         traj_file = base + "_opt_traj.xyz"
         final_traj_file = base + "_traj.xyz"
 
         atoms = self.atoms
         positions = np.asarray(atoms.get_positions(), dtype=float)
-        energy, forces = get_energy_and_forces(atoms, self.constraints, use_projection=True)
+        energy, forces = yield atoms, self.constraints, True
 
         traj_atoms_list: list[Atoms] = [atoms.copy()]
         traj_energies_list: list[float] = [energy]
@@ -1091,7 +1133,8 @@ class CGWS(JobABC):
         search_direction = forces.copy()
 
         while iteration < self.params.max_iter:
-            alpha, _, _ = strong_wolfe_line_search(
+            alpha, _, _ = yield from _iter_wolfe_line_search(
+                    batch,
                 atoms,
                 search_direction,
                 energy,
@@ -1111,7 +1154,7 @@ class CGWS(JobABC):
             previous_forces = forces.copy()
             atoms.set_positions(positions + step)
             positions = np.asarray(atoms.get_positions(), dtype=float)
-            energy, forces = get_energy_and_forces(atoms, self.constraints, use_projection=True)
+            energy, forces = yield atoms, self.constraints, True
 
             iteration += 1
             traj_atoms_list.append(atoms.copy())
@@ -1136,7 +1179,7 @@ class CGWS(JobABC):
                     ],
                     self.output,
                 )
-                return atoms
+                return atoms, energy, forces, iteration, True
 
             diff = forces - previous_forces
             denom = float(np.dot(previous_forces.reshape(-1), previous_forces.reshape(-1)))
@@ -1158,7 +1201,7 @@ class CGWS(JobABC):
             ],
             self.output,
         )
-        return atoms
+        return atoms, energy, forces, iteration, False
 
 # ============================================================================
 # ### CG_BS
@@ -1283,6 +1326,18 @@ class CGBS(JobABC):
         direction: np.ndarray,
         alpha: float,
     ) -> tuple[np.ndarray | None, float, np.ndarray, float, bool]:
+        return _run_steps(self._iterate_backtracking(
+            positions, energy, forces, direction, alpha,
+        ))
+
+    def _iterate_backtracking(
+        self,
+        positions: np.ndarray,
+        energy: float,
+        forces: np.ndarray,
+        direction: np.ndarray,
+        alpha: float,
+    ):
         base_step = clip_step_by_atom_norm(alpha * direction, self.params.max_step)
         if float(np.max(np.abs(base_step))) <= 0.0:
             return None, energy, forces.copy(), 1.0, False
@@ -1298,11 +1353,7 @@ class CGBS(JobABC):
             step = trial_scale * base_step
 
             self.atoms.set_positions(positions + step)
-            trial_energy, trial_forces = get_energy_and_forces(
-                self.atoms,
-                self.constraints,
-                use_projection=True,
-            )
+            trial_energy, trial_forces = yield self.atoms, self.constraints, True
             armijo_limit = energy - self.params.armijo_c1 * trial_scale * directional_gain
             if (
                 trial_energy <= armijo_limit
@@ -1317,13 +1368,17 @@ class CGBS(JobABC):
             attempts += 1
 
     def run(self) -> Atoms:
+        return _run_steps(self._iterate())[0]
+
+    def _iterate(self, *, batch=False):
+        """Yield E/F requests while retaining the original numerical loop."""
         base, _ = os.path.splitext(self.output)
         traj_file = base + "_opt_traj.xyz"
         final_traj_file = base + "_traj.xyz"
 
         atoms = self.atoms
         positions = np.asarray(atoms.get_positions(), dtype=float)
-        energy, forces = get_energy_and_forces(atoms, self.constraints, use_projection=True)
+        energy, forces = yield atoms, self.constraints, True
 
         best_energy = energy
         best_positions = positions.copy()
@@ -1343,13 +1398,22 @@ class CGBS(JobABC):
             if float(np.dot(forces.reshape(-1), search_direction.reshape(-1))) <= 0.0:
                 search_direction = self._project_direction(positions, forces.copy())
 
-            step, trial_energy, trial_forces, trial_scale, was_shrunk = self._backtracking_step(
-                positions,
-                energy,
-                forces,
-                search_direction,
-                alpha,
-            )
+            if batch:
+                step, trial_energy, trial_forces, trial_scale, was_shrunk = yield from self._iterate_backtracking(
+                    positions,
+                    energy,
+                    forces,
+                    search_direction,
+                    alpha,
+                )
+            else:
+                step, trial_energy, trial_forces, trial_scale, was_shrunk = self._backtracking_step(
+                    positions,
+                    energy,
+                    forces,
+                    search_direction,
+                    alpha,
+                )
             if step is None:
                 line_search_failed = True
                 alpha = max(alpha * max(trial_scale, self.params.beta_shrink), self.params.beta_min)
@@ -1390,7 +1454,7 @@ class CGBS(JobABC):
                     ],
                     self.output,
                 )
-                return atoms
+                return atoms, energy, forces, iteration, True
 
             if was_shrunk:
                 gamma = 0.0
@@ -1405,7 +1469,7 @@ class CGBS(JobABC):
 
         atoms.set_positions(best_positions)
         energy = best_energy
-        forces = get_energy_and_forces(atoms, self.constraints, use_projection=True)[1]
+        forces = (yield (atoms, self.constraints, True))[1]
 
         write_xyz(final_traj_file, traj_atoms_list, energies=traj_energies_list)
         opt_file = base + "_opt.xyz"
@@ -1429,5 +1493,5 @@ class CGBS(JobABC):
                 ],
                 self.output,
             )
-        return atoms
+        return atoms, energy, forces, iteration, False
 

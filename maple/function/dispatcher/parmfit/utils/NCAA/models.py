@@ -16,6 +16,8 @@ from ..runtime import (
     get_potential_energy,
     optimize_atoms_geometry,
     optimize_model_geometry,
+    run_silent_lbfgs_batch,
+    silent_lbfgs_params,
 )
 from ..structure import copy_residue, covalent_cutoff, get_atom_xyz, get_resid_key, get_resid_label, max_serial, search_atom, _measure_dihedral
 
@@ -255,17 +257,10 @@ def _rotate_cap_to_dihedral(atoms, quartet: tuple[int, int, int, int], target_de
     atoms.set_positions(best_positions)
 
 
-def minimize_conformer(
-    model: dict,
-    *,
-    label: str,
-    phi_deg: float,
-    psi_deg: float,
-    source_atoms,
-    output: str,
-    max_iter: int = 256,
-    max_step: float = 0.2,
-) -> NCAAConformer:
+def _prepare_conformer(
+    model: dict, *, label: str, phi_deg: float, psi_deg: float,
+    source_atoms, output: str,
+):
     try:
         from ase.constraints import FixInternals
     except ModuleNotFoundError:
@@ -351,6 +346,24 @@ def minimize_conformer(
         minimized_atoms.set_constraint(constraint)
     else:  # pragma: no cover - test stub fallback
         minimized_atoms.constraints = [constraint]
+    return minimized_atoms
+
+
+def minimize_conformer(
+    model: dict,
+    *,
+    label: str,
+    phi_deg: float,
+    psi_deg: float,
+    source_atoms,
+    output: str,
+    max_iter: int = 256,
+    max_step: float = 0.2,
+) -> NCAAConformer:
+    minimized_atoms = _prepare_conformer(
+        model, label=label, phi_deg=phi_deg, psi_deg=psi_deg,
+        source_atoms=source_atoms, output=output,
+    )
     try:
         optimize_atoms_geometry(
             minimized_atoms,
@@ -382,22 +395,35 @@ def build_charge_conformers(
     output_base: str,
     max_iter: int = 256,
     max_step: float = 0.2,
+    batch_size: int | None = None,
 ) -> list[NCAAConformer]:
-    conformers: list[NCAAConformer] = []
-    for label, phi_deg, psi_deg in conformer_targets(chirality):
-        conformers.append(
-            minimize_conformer(
-                model=reference_model,
-                label=label,
-                phi_deg=phi_deg,
-                psi_deg=psi_deg,
-                source_atoms=source_atoms,
-                output=f"{output_base}_{label}.out",
-                max_iter=max_iter,
-                max_step=max_step,
-            )
+    targets = list(conformer_targets(chirality))
+    atoms_list, outputs = [], []
+    try:
+        for label, phi_deg, psi_deg in targets:
+            output = f"{output_base}_{label}.out"
+            atoms_list.append(_prepare_conformer(
+                reference_model, label=label, phi_deg=phi_deg, psi_deg=psi_deg,
+                source_atoms=source_atoms, output=output,
+            ))
+            outputs.append(f"{os.path.splitext(output)[0]}_opt.out")
+        params = silent_lbfgs_params()
+        params.max_iter = int(max_iter)
+        params.max_step = float(max_step)
+        optimizer = run_silent_lbfgs_batch(
+            atoms_list, outputs=outputs, params=params, batch_size=batch_size,
         )
-    return conformers
+        for index, (label, _, _) in enumerate(targets):
+            if not optimizer.converged[index]:
+                raise RuntimeError(f"NCAA {label} conformer optimization did not converge.")
+    finally:
+        for atoms in atoms_list:
+            atoms.set_constraint(None)
+    return [NCAAConformer(
+        label=label, phi_deg=phi_deg, psi_deg=psi_deg,
+        energy=float(optimizer.energies[index]),
+        model=update_model_from_atoms(reference_model, atoms),
+    ) for index, ((label, phi_deg, psi_deg), atoms) in enumerate(zip(targets, atoms_list))]
 
 
 def _build_backbone_rotation_map(model: dict) -> dict[str, tuple[int, int, int, int]]:

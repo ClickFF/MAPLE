@@ -9,12 +9,15 @@ Features:
 """
 from __future__ import annotations
 import os
+from contextlib import nullcontext
 import sys
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._inputs import _state
+from maple.function.calculator._batch import energy_forces_single
 
 from .logger import log_info
 from ...jobABC import JobABC
@@ -46,92 +49,83 @@ def vec1d(x, n_expected=None):
         raise ValueError(f"Expected size {n_expected}, got {v.size}")
     return v
 
-def write_xyz(filename: str, atoms: Atoms, energy: Optional[float] = None, 
-              iteration: Optional[int] = None):
-    """
-    Write a single geometry to XYZ file.
-    
-    Parameters
-    ----------
-    filename : str
-        Output file path
-    atoms : Atoms
-        ASE Atoms object
-    energy : float, optional
-        Energy value to include in comment line
-    iteration : int, optional
-        Iteration number to include in comment line
-    """
+def write_xyz(filename: str, atoms: Atoms, energy: Optional[float] = None,
+              iteration: Optional[int] = None, forces=None):
     if atoms.info.get("pdb_template"):
         write_pdb(filename, atoms, atoms.info["pdb_template"])
         return
-    pos = to_numpy_f64(atoms.get_positions())
+
+    pos = atoms.get_positions()
     symbols = atoms.get_chemical_symbols()
-    
-    with open(filename, "w") as f:
-        f.write(f"{len(symbols)}\n")
-        
-        # Build comment line
-        comment_parts = []
-        if iteration is not None:
-            comment_parts.append(f"Iteration {iteration}")
-        if energy is not None:
-            comment_parts.append(f"Energy = {energy:.10f}")
-        
-        if comment_parts:
-            f.write("  ".join(comment_parts) + "\n")
-        else:
-            f.write("TS optimization\n")
-        
-        for s, (x, y, z) in zip(symbols, pos):
-            f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+
+    lines = [f"{len(symbols)}\n"]
+    comment_parts = [f"Iteration {iteration}" if iteration is not None else "Image 0"]
+    if energy is not None:
+        comment_parts.append(f"Energy = {energy:.10f}")
+        comment_parts.append('energy_unit=Hartree')
+    charge, mult = _state(atoms)
+    comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+    if atoms.cell.rank:
+        lattice = ' '.join(f'{value:.12g}' for value in atoms.cell.array.reshape(-1))
+        pbc = ' '.join('T' if flag else 'F' for flag in atoms.pbc)
+        comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+    if forces is not None:
+        kind = 'constraint_adjusted' if atoms.constraints else 'raw'
+        comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+        comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+    lines.append('  '.join(comment_parts) + '\n')
+    for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+        line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+        if forces is not None:
+            fx, fy, fz = forces[j]
+            line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+        lines.append(line + '\n')
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w")) as f:
+        f.writelines(lines)
+        f.flush()
+
 
 def append_xyz_trajectory(filename: str, atoms: Atoms, energy: Optional[float] = None,
-                         iteration: int = 0):
-    """
-    Append a geometry to XYZ trajectory file.
-    
-    Parameters
-    ----------
-    filename : str
-        Output trajectory file path
-    atoms : Atoms
-        ASE Atoms object
-    energy : float, optional
-        Energy value to include in comment line
-    iteration : int
-        Iteration number
-    """
-    # Remove file if first iteration
-    if iteration == 0 and os.path.exists(filename):
-        os.remove(filename)
+                          iteration: int = 0, forces=None):
     if atoms.info.get("pdb_template"):
         remark = f"Iteration {iteration}"
         if energy is not None:
             remark += f"  Energy = {energy:.10f}"
-        with open(filename, "a", encoding="utf-8") as f:
-            write_pdb_model(
-                f,
-                atoms,
-                atoms.info["pdb_template"],
-                model_index=iteration + 1,
-                remark=remark,
-            )
+        with open(filename, 'w' if iteration == 0 else 'a', encoding='utf-8') as f:
+            write_pdb_model(f, atoms, atoms.info['pdb_template'],
+                            model_index=iteration + 1, remark=remark)
         return
-    
-    pos = to_numpy_f64(atoms.get_positions())
+
+    pos = atoms.get_positions()
     symbols = atoms.get_chemical_symbols()
-    
-    with open(filename, "a") as f:
-        f.write(f"{len(symbols)}\n")
-        
-        if energy is not None:
-            f.write(f"Iteration {iteration}  Energy = {energy:.10f}\n")
-        else:
-            f.write(f"Iteration {iteration}\n")
-        
-        for s, (x, y, z) in zip(symbols, pos):
-            f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+
+    lines = [f"{len(symbols)}\n"]
+    comment_parts = [f"Iteration {iteration}"]
+    if energy is not None:
+        comment_parts.append(f"Energy = {energy:.10f}")
+        comment_parts.append('energy_unit=Hartree')
+    charge, mult = _state(atoms)
+    comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+    if atoms.cell.rank:
+        lattice = ' '.join(f'{value:.12g}' for value in atoms.cell.array.reshape(-1))
+        pbc = ' '.join('T' if flag else 'F' for flag in atoms.pbc)
+        comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+    if forces is not None:
+        kind = 'constraint_adjusted' if atoms.constraints else 'raw'
+        comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+        comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+    lines.append('  '.join(comment_parts) + '\n')
+    for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+        line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+        if forces is not None:
+            fx, fy, fz = forces[j]
+            line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+        lines.append(line + '\n')
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w" if iteration == 0 else "a")) as f:
+        f.writelines(lines)
+        f.flush()
 
 # =============================================================================
 # ------------------------------- PRFO Core -----------------------------------
@@ -712,15 +706,15 @@ class PRFO(JobABC):
 
         H_work = None
         
+        E_old, F_cart = energy_forces_single(atoms.calc, atoms)
+        self.results = {'atoms': atoms, 'energy': E_old, 'forces': F_cart,
+                        'iterations': 0, 'converged': False}
+
         # Main optimization loop
         while iteration < self.params.max_iter:
             # Get current geometry and energy/forces
             X = atoms.get_positions().reshape(-1, 3)
-            E_old = to_numpy_f64(
-                atoms.get_potential_energy(force_consistent=True)
-            )
-            
-            F_cart = to_numpy_f64(atoms.get_forces())
+            E_old, F_cart = self.results["energy"], self.results["forces"]
             g_cart = vec1d(-F_cart)
             
             need_recalc = (
@@ -804,9 +798,13 @@ class PRFO(JobABC):
                 atoms.set_positions(X_new)
                 
                 # New energy
-                E_new = to_numpy_f64(
-                    atoms.get_potential_energy(force_consistent=True)
-                )
+                try:
+                    E_new, F_new = energy_forces_single(atoms.calc, atoms)
+                except Exception:
+                    atoms.set_positions(X)
+                    raise
+                s_cart = (atoms.positions - X).reshape(-1)
+                model_change = float(g_cart.dot(s_cart) + .5 * s_cart.dot(H_cart @ s_cart))
                 
                 actual_change = float(E_new - E_old)
                 rho = None
@@ -834,7 +832,6 @@ class PRFO(JobABC):
                                          2.0 * trust_radius)
                     
                     # Get new forces for convergence check
-                    F_new = to_numpy_f64(atoms.get_forces())
                     g_new_cart = vec1d(-F_new, n3)
                     if not need_recalc:
                         y_cart = g_new_cart - g_cart
@@ -855,13 +852,16 @@ class PRFO(JobABC):
                                      model_change, actual_change, rho,
                                      trust_radius, norm_mw, on_boundary)
                     
+                    converged = self.check_convergence(atoms)
+                    self.results.update(energy=E_new, forces=F_new, iterations=iteration + 1,
+                                        converged=converged)
+
                     # Write to trajectory
                     append_xyz_trajectory(traj_file, atoms, energy=E_new,
-                                        iteration=iteration + 1)
+                                        iteration=iteration + 1, forces=F_new)
                     
                     # Check convergence
-                    if self.check_convergence(atoms):
-                        converged = True
+                    if converged:
                         info_message = [
                             '\n\n' + '-' * 70 + '\n',
                             f'{"Normal Termination".center(70)}\n\n'
@@ -870,7 +870,7 @@ class PRFO(JobABC):
                         
                         # Write final TS structure
                         write_xyz(ts_file, atoms, energy=E_new,
-                                iteration=iteration + 1)
+                                iteration=iteration + 1, forces=F_new)
                         
                         return atoms
             
@@ -881,8 +881,9 @@ class PRFO(JobABC):
                 self.output)
         
         # Write final structure even if not converged
-        E_final = atoms.get_potential_energy(force_consistent=True)
-        write_xyz(ts_file, atoms, energy=E_final, iteration=iteration)
+        self.results["iterations"] = iteration
+        E_final = self.results["energy"]
+        write_xyz(ts_file, atoms, energy=E_final, iteration=iteration, forces=self.results["forces"])
         
         log_info([
             f"\nWrote trajectory to: {traj_file}\n",

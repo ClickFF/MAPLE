@@ -135,6 +135,20 @@ def run_silent_lbfgs(
     return optimizer
 
 
+def run_silent_lbfgs_batch(atoms_list, *, outputs, params=None, batch_size=None):
+    from .Scan.batch_optimizer import BatchLBFGS
+
+    if len(atoms_list) != len(outputs):
+        raise ValueError("atoms_list and outputs must have the same length")
+    optimizers = []
+    for atoms, output in zip(atoms_list, outputs):
+        _require_lbfgs_thresholds(atoms)
+        optimizers.append(LBFGS(atoms, output=output, params=silent_lbfgs_params(params)))
+    optimizer = BatchLBFGS(optimizers, batch_size=batch_size)
+    optimizer.run()
+    return optimizer
+
+
 
 def optimize_atoms_geometry(
     atoms: Atoms,

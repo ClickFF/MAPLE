@@ -1,6 +1,6 @@
 """Usage: expose the constrained silent scan API."""
 
-from .api import read_scan_final_atoms, run_silent_scan
+from .api import read_scan_final_atoms, run_silent_scan, run_silent_scan_batch
 from .engine import SilentScanEngine
 from .models import ScanConstraint, SilentScanOptions, SilentScanResult
 
@@ -11,4 +11,5 @@ __all__ = [
     "SilentScanResult",
     "read_scan_final_atoms",
     "run_silent_scan",
+    "run_silent_scan_batch",
 ]

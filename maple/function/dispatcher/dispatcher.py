@@ -27,10 +27,8 @@ class Dispatcher():
         if jobtype == 'opt':
             from .optimization import Optimization
 
-            if isinstance(atoms, (list, Molecules)):
-                raise NotImplementedError('For optimization job, only one Atoms object is allowed.')
             opt = Optimization(output=output, atoms=atoms, params=commandcontrol.params)
-            opt.run()
+            return opt.run()
             
         elif jobtype == 'sp':
             from .sp import SinglePoint
@@ -67,37 +65,18 @@ class Dispatcher():
             
         elif jobtype == 'freq':
             from .frequency import Frequency
-            if isinstance(atoms, (list, Molecules)):
-                raise NotImplementedError('For frequency job, only one Atoms object is allowed.')
             freq = Frequency(output=output, atoms=atoms, paras=commandcontrol.params)
             freq.run()
             
         elif jobtype == 'ts':
             from .ts import TransitionState
             
-            # TS job allows Molecules object for methods like NEB, STRING
-            if isinstance(atoms, (list, Molecules)):
-                method = commandcontrol.params.get('method')
-                if method in ['neb', 'string', 'autoneb', 'dmf']:
-                    # Convert Molecules to its internal list if needed
-                    atoms_input = atoms.multiatoms if isinstance(atoms, Molecules) else atoms
-                    ts = TransitionState(output=output, atoms=atoms_input, method=method, params=commandcontrol.params)
-                    ts.run()
-                    return
-                elif method == 'prfo':
-                    raise NotImplementedError('For transition state search job with PRFO method, only one Atoms object is allowed.')
-                else:
-                    raise ValueError(f'Unknown TS method: {method}')
-
-            # Single Atoms object
             ts = TransitionState(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
-            ts.run()
+            return ts.run()
         
         elif jobtype == 'irc':
             from .irc import IRC
 
-            if isinstance(atoms, (list, Molecules)):
-                raise NotImplementedError('For IRC job, only one Atoms object is allowed.')
             irc = IRC(output=output, atoms=atoms, method=commandcontrol.params.get('method'), params=commandcontrol.params)
             irc.run()
         elif jobtype == 'md':

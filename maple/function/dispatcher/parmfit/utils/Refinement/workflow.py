@@ -71,6 +71,7 @@ def run_bonded_refinement(
 
 def build_torsion_runtime(config: RefinementConfig) -> TorsionScanRuntime:
     return TorsionScanRuntime(
+        batch_size=config.batch_size,
         max_iter=int(config.scan_opt.max_iter),
         memory=int(config.scan_opt.memory),
         curvature=float(config.scan_opt.curvature),

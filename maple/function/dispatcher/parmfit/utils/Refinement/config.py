@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ....jobABC import JobABC
-from ...runconfig import as_tracked
+from ...runconfig import as_tracked, read_batch_size
 from ..chgfit import ChargeFitConfig, build_charge_fit_config
 from ..QMInterface import QMReferenceConfig, build_qm_reference_config
 from ..Scan.optimizer import LBFGSParams
@@ -26,6 +26,7 @@ class RefinementConfig:
     torsion: TorsionFitParams = field(default_factory=TorsionFitParams)
     lbfgs: LBFGSParams = field(default_factory=LBFGSParams)
     scan_opt: LBFGSParams = field(default_factory=LBFGSParams)
+    batch_size: int | None = None
 
 
 def build_refinement_config(raw_params: Optional[dict]) -> RefinementConfig:
@@ -37,6 +38,7 @@ def build_refinement_config(raw_params: Optional[dict]) -> RefinementConfig:
     raw = as_tracked(nested if nested is not None else params)
     raw.set_group("Refinement run", "Site composition, charge source and general refinement settings")
     config = RefinementConfig()
+    config.batch_size = read_batch_size(raw)
     config.mol2 = raw.get("mol2", config.mol2)
     config.bonded = str(raw.get("bonded", config.bonded)).strip().lower()
     if config.bonded not in SUPPORTED_BONDED_METHODS:

@@ -8,7 +8,7 @@ from ..chgfit import ChargeFitConfig, build_charge_fit_config
 from ..QMInterface import QMReferenceConfig, build_qm_reference_config
 from ..TorsionFit import TorsionFitParams, build_torsion_fit_params
 from ..TorsionFit.config import _parse_torsion_bonds
-from ...runconfig import as_tracked
+from ...runconfig import as_tracked, read_batch_size
 
 
 SUPPORTED_PRO_FF = ("ff14SB", "ff19SB")
@@ -37,6 +37,7 @@ class NCAAAbinitioConfig:
     ncaa_resnames: tuple[str, ...] = ()
     ncaa_mults: tuple[int, ...] = ()
     torsion_bonds_per_residue: tuple[tuple[tuple[int, int], ...], ...] | None = None
+    batch_size: int | None = None
 
 
 def _split_entries(value) -> list[str]:
@@ -141,6 +142,7 @@ def parse_ncaa_abinitio_config(
         qm=qm,
         rn=ncaa_resnames[0] if ncaa_resnames else "MOL",
         vib_scale=vib_scale,
+        batch_size=read_batch_size(raw),
         opt_max_iter=opt_max_iter,
         opt_max_step=opt_max_step,
         torsion=torsion,

@@ -12,7 +12,8 @@ from ase import Atoms
 
 from ..mechanics import build_mm_topology_cache, dihedral_radians, evaluate_mm_energy
 from ..readparm import RefinementParameterSet
-from ..Scan import run_silent_scan
+from ..Scan import run_silent_scan, run_silent_scan_batch
+from ..Scan.batch_optimizer import BatchCGBS
 from ..Scan.optimizer import CGBS, _get_potential_energy
 from ..runtime import copy_thresholds, parmfit_work_prefix, parmfit_workdir
 from ..QMInterface.calculator import QMExternalCalculator
@@ -185,15 +186,32 @@ def _run_improper_scan(
     center = quartet[2]
     _, scan_xyz = _scan_output_paths(output, (center, center), workflow)
     steps = _improper_steps_per_side(params)
-    idx = tuple(atom - 1 for atom in quartet)
     stem = os.path.splitext(scan_xyz)[0]
-    initial = float(atoms.get_dihedral(*idx))
-
     frames: list[tuple[float, float, np.ndarray]] = []
     symbols = atoms.get_chemical_symbols()
+    points = _iter_improper_points(atoms, params, quartet, steps)
+    try:
+        scan_atoms, target, direction = next(points)
+        while True:
+            scan_atoms = _relax_improper_point(
+                scan_atoms, quartet, runtime, f"{stem}_{'neg' if direction < 0 else 'pos'}",
+            )
+            frames.append((target, float(_get_potential_energy(scan_atoms)), scan_atoms.positions.copy()))
+            scan_atoms, target, direction = points.send(scan_atoms)
+    except StopIteration:
+        pass
+    finally:
+        points.close()
+
+    merged_frames = list(reversed(frames[:steps])) + frames[steps:]
+    return _write_improper_scan_xyz(scan_xyz, merged_frames, symbols)
+
+
+def _iter_improper_points(atoms, params, quartet, steps):
+    idx = tuple(atom - 1 for atom in quartet)
+    initial = float(atoms.get_dihedral(*idx))
+    # Both branches start from the same reference; keep the shared point once.
     for direction in (-1, +1):
-        # both branches start from the same optimized structure; the shared
-        # planar point is kept once (from the positive branch)
         scan_atoms = atoms.copy()
         scan_atoms.calc = atoms.calc
         copy_thresholds(atoms, scan_atoms)
@@ -201,20 +219,49 @@ def _run_improper_scan(
         for i in point_range:
             target = initial + direction * params.torsion_step_deg * i
             scan_atoms.set_dihedral(*idx, target)
-            scan_atoms = _relax_improper_point(scan_atoms, quartet, runtime, f"{stem}_{'neg' if direction < 0 else 'pos'}")
-            frames.append(
-                (
-                    target,
-                    float(_get_potential_energy(scan_atoms)),
-                    np.asarray(scan_atoms.get_positions(), dtype=float).copy(),
-                )
-            )
+            scan_atoms = yield scan_atoms, target, direction
 
-    merged_frames = list(reversed(frames[:steps])) + frames[steps:]
-    return _write_improper_scan_xyz(scan_xyz, merged_frames, symbols)
+
+def _run_improper_scan_batch(atoms, output, params, runtime, quartets, workflow="torsionfit"):
+    if not quartets:
+        return []
+    paths = [_scan_output_paths(output, (q[2], q[2]), workflow)[1] for q in quartets]
+    steps = _improper_steps_per_side(params)
+    points = [_iter_improper_points(atoms, params, q, steps) for q in quartets]
+    current = [next(stream) for stream in points]
+    frames = [[] for _ in quartets]
+
+    def build_optimizer(index):
+        scan_atoms, _, direction = current[index]
+        stem = os.path.splitext(paths[index])[0] + ("_neg" if direction < 0 else "_pos")
+        return _build_improper_optimizer(scan_atoms, quartets[index], runtime, stem)
+
+    batch = BatchCGBS([build_optimizer(i) for i in range(len(quartets))], batch_size=runtime.batch_size)
+    try:
+        while batch.active:
+            for index in batch.step():
+                scan_atoms = batch.optimizers[index].atoms
+                frames[index].append((current[index][1], float(batch.energies[index]), scan_atoms.positions.copy()))
+                try:
+                    current[index] = points[index].send(scan_atoms)
+                except StopIteration:
+                    continue
+                batch.replace(index, build_optimizer(index))
+        symbols = atoms.get_chemical_symbols()
+        for path, values in zip(paths, frames):
+            _write_improper_scan_xyz(path, list(reversed(values[:steps])) + values[steps:], symbols)
+        return paths
+    finally:
+        batch.close()
+        for stream in points:
+            stream.close()
 
 
 def _relax_improper_point(atoms: Atoms, quartet: tuple[int, int, int, int], runtime: TorsionScanRuntime, log_stem: str) -> Atoms:
+    return _build_improper_optimizer(atoms, quartet, runtime, log_stem).run()
+
+
+def _build_improper_optimizer(atoms, quartet, runtime, log_stem):
     paras = {
         "max_iter": int(runtime.max_iter),
         "max_step": float(runtime.max_step),
@@ -222,8 +269,7 @@ def _relax_improper_point(atoms: Atoms, quartet: tuple[int, int, int, int], runt
         "verbose": 0,
         "torsion_constraints": [tuple(quartet)],
     }
-    optimizer = CGBS(atoms, output=log_stem + ".out", paras={"opt": paras})
-    return optimizer.run()
+    return CGBS(atoms, output=log_stem + ".out", paras={"opt": paras})
 
 
 def _write_improper_scan_xyz(path: str, frames, symbols) -> str:
@@ -467,6 +513,34 @@ def _filter_loss_mode_scan_points(
     return filtered, warning, mm_orig_report_rel
 
 
+def _run_mlip_scans(*, atoms, output, params, runtime, paramset, scan_targets,
+                    topology_cache, workflow, qm_mode):
+    """Populate missing MLIP scan files; the existing workflow consumes them in order."""
+    proper, improper = [], []
+    for center_key, target in scan_targets:
+        _, path = _scan_output_paths(output, center_key, workflow)
+        if target is not None:
+            if qm_mode in {2, 3}:
+                raise ValueError(f"QM mode {qm_mode} is not supported for improper torsion scans; use qm_mode=1.")
+            cached = _read_cached_improper_scan_if_valid(path, atoms, params, target.atoms)
+            if cached is None or _scan_has_qm(path):
+                improper.append(target.atoms)
+        elif qm_mode != 3:
+            representative = representative_dihedral_for_torsion_bond(paramset, center_key, topology_cache=topology_cache)
+            cached = _read_cached_scan_if_valid(path, atoms, params, representative.atoms)
+            if cached is None or _scan_has_qm(path):
+                proper.append((center_key, representative.atoms))
+    if len(proper) > 1:
+        run_silent_scan_batch(
+            atoms_list=[atoms] * len(proper),
+            outputs=[_scan_output_paths(output, key, workflow)[0] for key, _ in proper],
+            constraints_list=[[[*quartet, params.torsion_step_deg, params.torsion_steps]] for _, quartet in proper],
+            params=runtime.to_scan_params(), method=runtime.backend, constraint_mode=runtime.constraint_mode,
+        )
+    if len(improper) > 1:
+        _run_improper_scan_batch(atoms, output, params, runtime, improper, workflow)
+
+
 def run_torsion_workflow(
     *,
     atoms: Atoms,
@@ -532,6 +606,10 @@ def run_torsion_workflow(
 
     scan_targets = [(normalize_torsion_bond(torsion_bond), None) for torsion_bond in torsion_bonds]
     scan_targets += list(improper_map.items())
+    _run_mlip_scans(
+        atoms=atoms, output=output, params=params, runtime=runtime, paramset=base_paramset,
+        scan_targets=scan_targets, topology_cache=topology_cache, workflow=workflow, qm_mode=qm_mode,
+    )
     for center_key, improper_target in scan_targets:
         if center_key[0] == center_key[1]:
             if qm_runner is not None and int(qm_mode) in {2, 3}:
@@ -670,6 +748,7 @@ def run_torsion_workflow(
             mobile_atoms=mobile_atoms,
             log_info=log_info,
             workflow=workflow,
+            batch_size=runtime.batch_size,
         )
         warnings.extend(ensemble_result.warnings)
 

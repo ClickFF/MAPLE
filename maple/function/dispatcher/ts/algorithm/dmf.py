@@ -14,6 +14,7 @@ needs only first-order forces.
 """
 
 import os
+from contextlib import nullcontext
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from typing import Any, List, Optional
 import cyipopt
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._inputs import _state
+from maple.function.calculator._batch import energy_forces_images, energy_forces_single
 from ase.calculators.calculator import Calculator, PropertyNotImplementedError
 from ase.calculators.mixing import SumCalculator
 from ase.data import covalent_radii
@@ -69,22 +72,44 @@ def _atoms_to_xyz(atoms: Atoms) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None):
+def _write_xyz(filename: str, images: List[Atoms], energies: Optional[List[float]] = None, forces=None):
     """Write a multi-frame XYZ trajectory; energies (if given) go in the comment line."""
     if images and images[0].info.get("pdb_template"):
         write_pdb_trajectory(filename, images, energies=energies)
         return
-    with open(filename, "w") as f:
-        for i, at in enumerate(images):
-            pos = _to_f64(at.get_positions())
-            symbols = at.get_chemical_symbols()
-            f.write(f"{len(symbols)}\n")
-            if energies is not None:
-                f.write(f"Image {i}  Energy = {energies[i]:.8f}\n")
-            else:
-                f.write(f"Image {i}\n")
-            for s, (x, y, z) in zip(symbols, pos):
-                f.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+
+    blocks = []
+    for i, at in enumerate(images):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [f"Image {i}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, "w")) as f:
+        f.writelines(blocks)
+        f.flush()
 
 
 def _load_array_param(value: Any, name: str, allow_txt: bool = True) -> Optional[np.ndarray]:
@@ -635,6 +660,7 @@ def interpolate_fbenm(
 
 @dataclass
 class DMFParams:
+    batch_size: Optional[int] = None
     backend: str = "numpy"                        # tensor backend: numpy or torch
     beta: float = 10.0                           # reciprocal temperature (1/eV)
     nmove: int = 10                               # movable energy-evaluation points
@@ -825,6 +851,7 @@ class DMF(JobABC):
         if backend == "torch":
             dmf_kwargs["device"] = backend_device
         mxflx = dmf_class(ref_images, **dmf_kwargs)
+        mxflx.batch_size = p.batch_size
 
         # Share the input calculator across all evaluation-point images.
         # (The engine builds its images via Atoms.copy(), which drops the calc.)
@@ -837,8 +864,9 @@ class DMF(JobABC):
         mxflx.add_ipopt_options(ipopt_options)
 
         # Endpoint properties. MAPLE calculators expose Hartree units.
-        E_R = float(mxflx.images[0].get_potential_energy())
-        E_P = float(mxflx.images[-1].get_potential_energy())
+        endpoint_E, _ = energy_forces_images([mxflx.images[0], mxflx.images[-1]],
+                                           p.batch_size, force_consistent=False)
+        E_R, E_P = endpoint_E
         self.log_info([
             "\nFixed endpoints:\n",
             f"    Reactant  E = {E_R: .8f} Eh\n",
@@ -873,8 +901,7 @@ class DMF(JobABC):
         ts_atoms = mxflx.images[0].copy()
         ts_atoms.set_positions(ts_pos)
         ts_atoms.calc = base_calc
-        E_ts = float(ts_atoms.get_potential_energy())
-        F_ts = _to_f64(ts_atoms.get_forces())
+        E_ts, F_ts = energy_forces_single(base_calc, ts_atoms, force_consistent=False)
         maxF_ts = float(np.max(np.linalg.norm(F_ts, axis=1)))
 
         # Path energies are internal eV in the core; convert back to Hartree for MAPLE output.
@@ -885,8 +912,9 @@ class DMF(JobABC):
         path_file = base + "_dmf_mep" + ext
         tmax_file = base + "_dmf_tmax" + ext
         traj_file = base + "_dmf_tmax_traj" + ext
-        _write_xyz(path_file, list(mxflx.images), energies=list(E_path))
-        _write_xyz(tmax_file, [ts_atoms], energies=[E_ts])
+        F_path = np.asarray(mxflx.forces) * EV2HARTREE
+        _write_xyz(path_file, list(mxflx.images), energies=list(E_path), forces=F_path)
+        _write_xyz(tmax_file, [ts_atoms], energies=[E_ts], forces=[F_ts])
         if mxflx.history.images_tmax:
             _write_xyz(traj_file, list(mxflx.history.images_tmax))
 
@@ -945,13 +973,20 @@ class DMF(JobABC):
             write_info.append(f"Wrote refined TS structure to:  {refine_result['ts_file']}\n")
         self.log_info(write_info)
 
+        self.results = {'images': list(mxflx.images), 'energy': E_path,
+                        'forces': F_path,
+                        'ts_atoms': ts_atoms, 'ts_energy': E_ts, 'ts_forces': F_ts,
+                        'iterations': max(0, len(mxflx.history.energies) - 1),
+                        'converged': bool(info['status'] in (0, 1))}
+        return self.results['images']
+
     # ---------------------------------------------------------- refinement --
     def _refine_ts(self, ts_atoms: Atoms, base_calc, base: str):
         """
         Optionally refine the DMF TS guess to a true first-order saddle using an
         existing MAPLE single-ended optimiser (PRFO or Dimer). This only *calls*
-        those algorithms; it does not modify them. Failures are logged and do not
-        invalidate the DMF result above.
+        those algorithms; it does not modify them. Refinement failures are logged
+        while preserving the completed DMF path and TS guess.
         """
         method = (self.params.refine or "").strip().lower()
         if method not in ("prfo", "dimer"):
@@ -979,27 +1014,17 @@ class DMF(JobABC):
                 from .dimer import Dimer
                 job = Dimer(output=refine_out, atoms_init=guess, paras=self._paras)
             refined = job.run()
-            if refined is None:
-                refined = getattr(job, "atoms", None)
-            if refined is None:
-                self.log_info([f"DMF TS refinement with {method_label} finished. See {refine_out}.\n"])
-                return
-
-            if refined.calc is None:
-                refined.calc = base_calc
-            try:
-                E_ref = float(refined.get_potential_energy(force_consistent=True))
-            except (PropertyNotImplementedError, TypeError):
-                E_ref = float(refined.get_potential_energy())
-            F_ref = _to_f64(refined.get_forces())
+            E_ref = float(job.results['energy'])
+            F_ref = _to_f64(job.results['forces'])
             F_norm = np.linalg.norm(F_ref, axis=1)
             maxF_ref = float(np.max(F_norm))
             rmsF_ref = float(np.sqrt(np.mean(F_norm**2)))
-            _write_xyz(refine_ts, [refined], energies=[E_ref])
+            _write_xyz(refine_ts, [refined], energies=[E_ref], forces=[F_ref])
 
             return {
                 "atoms": refined,
                 "energy": E_ref,
+                "forces": F_ref,
                 "max_force": maxF_ref,
                 "rms_force": rmsF_ref,
                 "method_label": method_label,
@@ -1254,6 +1279,7 @@ class VariationalPathOpt(ABC, cyipopt.Problem):
 
         #Prallel calculation
         self.parallel = parallel
+        self.batch_size = None
         self.energy_force_scale = float(energy_force_scale)
 
         #Initialize images
@@ -1780,29 +1806,11 @@ class VariationalPathOpt(ABC, cyipopt.Problem):
 
 
     def _get_forces_by_img_idxs(self,idxs,energies,forces):
-
-        if self.parallel:
-
-            def run(image, energies, forces):
-                forces[:] = image.get_forces()*self.energy_force_scale
-                energies[:] = image.get_potential_energy()*self.energy_force_scale
-
-            threads = [threading.Thread(target=run,
-                                        args=(self.images[i],
-                                              energies[i:i+1],
-                                              forces[i:i+1]))
-                       for i in idxs]
-
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join()
-
-        else:
-
-            for i in idxs:
-                forces[i] = self.images[i].get_forces()*self.energy_force_scale
-                energies[i] = self.images[i].get_potential_energy()*self.energy_force_scale
+        E, F = energy_forces_images([self.images[i] for i in idxs],
+                                    self.batch_size, force_consistent=False)
+        for slot, i in enumerate(idxs):
+            energies[i] = E[slot] * self.energy_force_scale
+            forces[i] = F[slot] * self.energy_force_scale
 
 
     @abstractmethod

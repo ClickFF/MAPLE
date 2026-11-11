@@ -5,6 +5,7 @@ from typing import List, Optional
 
 import numpy as np
 from ase import Atoms
+from maple.function.calculator._batch import energy_forces_single
 
 from ._common import compute_metrics, is_converged, write_xyz
 from ...jobABC import JobABC
@@ -138,12 +139,13 @@ class LBFGS(JobABC):
         if self.params.verbose == 1:
             self.log_info(info_message)
 
-    def _finalize_run(self, e: float, summary: str, opt_traj_file: str) -> None:
+    def _finalize_run(self, e: float, summary: str, opt_traj_file: str, forces=None) -> None:
         """Write final optimized structure and log the closing summary."""
         base, _ = os.path.splitext(self.output)
         output_pdb = self.atoms.info.get("pdb_template")
         opt_file = base + ("_opt.pdb" if output_pdb else "_opt.xyz")
-        write_xyz(opt_file, [self.atoms], energies=[e])
+        write_xyz(opt_file, [self.atoms], energies=[e],
+                  forces=[forces] if forces is not None else None)
         if self.params.verbose != 1 and self._last_iter_info is not None:
             self.log_info(self._last_iter_info)
         info = [f"\n{summary}\n"]
@@ -163,10 +165,11 @@ class LBFGS(JobABC):
         atoms = self.atoms
         iteration = 0
         r = atoms.get_positions()
-        e = float(atoms.get_potential_energy(force_consistent=True))
-        write_xyz(opt_traj_file, [atoms.copy()], energies=[e])
-        f = atoms.get_forces()
+        e, f = energy_forces_single(atoms.calc, atoms)
+        write_xyz(opt_traj_file, [atoms.copy()], energies=[e], forces=[f])
 
+        self.results = {'atoms': atoms, 'energy': e, 'forces': f,
+                        'iterations': 0, 'converged': False}
         while iteration < self.params.max_iter:
             grad = (-f).reshape(-1)
             step_flat = self._two_loop(grad)
@@ -177,8 +180,12 @@ class LBFGS(JobABC):
             atoms.set_positions(r + step)
 
             r = atoms.get_positions()
-            f = atoms.get_forces()
-            e = float(atoms.get_potential_energy(force_consistent=True))
+            try:
+                e, f = energy_forces_single(atoms.calc, atoms)
+            except Exception:
+                atoms.set_positions(r_old)
+                raise
+            step = r - r_old
 
             s_vec = (r - r_old).reshape(-1)
             grad = (-f).reshape(-1)
@@ -195,25 +202,27 @@ class LBFGS(JobABC):
             self._log_iter(last_info)
 
             converged = is_converged(atoms)
+            self.results.update(energy=e, forces=f, iterations=iteration, converged=converged)
             write_xyz(
                 opt_traj_file,
                 [atoms.copy()],
                 energies=[e],
                 mode="a",
                 start_index=iteration,
+                forces=[f],
             )
 
             if converged:
                 self._finalize_run(
                     e,
                     f"LBFGS converged at iteration {iteration}.",
-                    opt_traj_file,
+                    opt_traj_file, forces=f,
                 )
                 return atoms
 
         self._finalize_run(
             e,
             f"LBFGS did NOT converge after {self.params.max_iter} iterations.",
-            opt_traj_file,
+            opt_traj_file, forces=f,
         )
         return atoms

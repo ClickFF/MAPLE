@@ -1,14 +1,69 @@
 import os
+from contextlib import nullcontext
 from typing import List, Optional
 
 from ase import Atoms
+from maple.function.calculator._inputs import _state
 from ase.constraints import FixInternals
 from ase.neighborlist import NeighborList, natural_cutoffs
 
 from ..jobABC import JobABC
 
 from maple.function.timer import timer
-from maple.function.read.filereader.pdb_reader import write_pdb_model
+from maple.function.read.filereader.pdb_reader import write_pdb_model, write_pdb_trajectory
+
+
+def write_xyz(filename, atoms_list: List[Atoms],
+              energies: Optional[List[float]] = None,
+              mode: str = "w",
+              start_index: int = 0,
+              forces=None,
+              comments: Optional[List[str]] = None) -> None:
+    """Write supplied XYZ frames to a path or stream without evaluating them."""
+    if atoms_list and atoms_list[0].info.get("pdb_template"):
+        write_pdb_trajectory(
+            filename,
+            atoms_list,
+            energies=energies,
+            mode=mode,
+            start_index=start_index,
+        )
+        return
+
+    blocks = []
+    for i, at in enumerate(atoms_list):
+        pos = at.get_positions()
+        symbols = at.get_chemical_symbols()
+        image_index = start_index + i
+
+        lines = [f"{len(symbols)}\n"]
+        comment_parts = [comments[i] if comments is not None else f"Image {image_index}"]
+        if energies is not None:
+            comment_parts.append(f"Energy = {energies[i]:.10f}")
+            comment_parts.append('energy_unit=Hartree')
+        charge, mult = _state(at)
+        comment_parts.append(f"charge={charge:.17g} mult={int(mult)}")
+        if at.cell.rank:
+            lattice = ' '.join(f'{value:.12g}' for value in at.cell.array.reshape(-1))
+            pbc = ' '.join('T' if flag else 'F' for flag in at.pbc)
+            comment_parts.append(f'Lattice="{lattice}" pbc="{pbc}"')
+        if forces is not None:
+            kind = 'constraint_adjusted' if at.constraints else 'raw'
+            comment_parts.append('Properties=species:S:1:pos:R:3:forces:R:3')
+            comment_parts.append(f'force_unit=Hartree/Angstrom force_kind={kind}')
+        lines.append('  '.join(comment_parts) + '\n')
+        for j, (s, (x, y, z)) in enumerate(zip(symbols, pos)):
+            line = f"{s:2s} {x: .10f} {y: .10f} {z: .10f}"
+            if forces is not None:
+                fx, fy, fz = forces[i][j]
+                line += f" {fx: .10f} {fy: .10f} {fz: .10f}"
+            lines.append(line + '\n')
+        blocks.append("".join(lines))
+
+    with (nullcontext(filename) if hasattr(filename, 'write') else open(filename, mode)) as f:
+        f.writelines(blocks)
+        f.flush()
+
 
 class Scan(JobABC):
     """
@@ -41,6 +96,7 @@ class Scan(JobABC):
         # Initialize XYZ file handle
         self.xyz_file = None
         self._pdb_model_index = 0
+        self.results = dict(coords_list=[], energies=[], iterations=[], converged=[], trajectory=None)
 
     def _convert_constraints(self, original_constraints: list) -> list:
         """Normalize constraint definitions."""
@@ -192,16 +248,23 @@ class Scan(JobABC):
         params["method"] = self.method
         params["verbose"] = 0  # suppress optimizer output inside each scan point
         params["log_final_paths"] = False  # scan removes per-point optimizer temp files
-        return Optimization(params=params, output=self.output, atoms=atoms).run()
+        job = Optimization(params=params, output=self.output, atoms=atoms)
+        atoms = job.run()
+        self._opt_results = job.results
+        return atoms
 
     def _record_result(self, atoms: Atoms, coord: List[float],
                        coords_list: list, energies: list):
         """Record a scan point result by streaming to file."""
-        # Get energy and structure info
-        e = float(atoms.get_potential_energy(force_consistent=True))
-        pos = atoms.get_positions()
-        symbols = atoms.get_chemical_symbols()
-        
+        # The optimizer already evaluated this accepted geometry, including constraints.
+        if self.mode == "relaxed":
+            e = float(self._opt_results['energy'])
+            forces = self._opt_results['forces']
+            iterations = self._opt_results['iterations']
+            converged = self._opt_results['converged']
+        else:
+            e = float(atoms.get_potential_energy(force_consistent=True))
+            forces, iterations, converged = None, 0, None
         coord_str = "[" + ", ".join(f"{v:.4f}" for v in coord) + "]"
         comment = (
             f"Scanning combination {self._current_index}/{self._total_combinations}: "
@@ -218,16 +281,18 @@ class Scan(JobABC):
                 remark=comment.strip(),
             )
         else:
-            # Write to XYZ file immediately
-            self.xyz_file.write(f"{len(symbols)}\n")
-            self.xyz_file.write(comment)
-            for s, (x, y, z) in zip(symbols, pos):
-                self.xyz_file.write(f"{s:2s} {x: .10f} {y: .10f} {z: .10f}\n")
+            write_xyz(self.xyz_file, [atoms], energies=[e],
+                      forces=[forces] if forces is not None else None,
+                      comments=[f"Scanning combination {self._current_index}/{self._total_combinations}: {coord_str}"])
         self.xyz_file.flush()  # Ensure data is written
         
         # Store lightweight data
         coords_list.append(coord[:])
         energies.append(e)
+        self.results['iterations'].append(iterations)
+        self.results['converged'].append(converged)
+        if self.mode == "relaxed" and not converged:
+            self.log_info([f"Scan point {self._current_index}: NOT converged after {iterations} iterations.\n"])
 
         # For rigid scan, log coordinates to output
         if self.mode == "rigid":
@@ -338,8 +403,7 @@ class Scan(JobABC):
                 grid_xy[(ix, iy)] = self._safe_copy(atoms_current)  # Keep initial plane
                 self._record_result(atoms_current, coord, coords_list, energies)
             
-            # Can delete the first line point now (initial plane is complete)
-            del grid_xy[(ix, 0)]
+            # Keep y=y0 as a starting point for its Z branch below.
 
         # Step 3: scan along Z for each (X, Y)
         for ix, xv in enumerate(x_values):
@@ -369,6 +433,7 @@ class Scan(JobABC):
     def run_scan(self):
         """Main scan entry point."""
         scan_values = self._generate_scan_values()
+        self.results = dict(coords_list=[], energies=[], iterations=[], converged=[], trajectory=None)
         dim = len(scan_values)
 
         total = 1
@@ -381,6 +446,7 @@ class Scan(JobABC):
         base, _ = os.path.splitext(self.output)
         output_pdb = self.atoms.info.get("pdb_template")
         xyz_filename = base + ("_scan_final.pdb" if output_pdb else "_scan_final.xyz")
+        self.results['trajectory'] = xyz_filename
         self._pdb_model_index = 0
         
         try:
@@ -394,6 +460,8 @@ class Scan(JobABC):
                 coords_list, energies = self._scan_3d(scan_values)
             else:
                 raise ValueError(f"Only 1D, 2D, 3D scans are supported, got {dim}D")
+
+            self.results.update(coords_list=coords_list, energies=energies)
             
             self.log_info(["\n"])
             self.log_info(["=" * 70])

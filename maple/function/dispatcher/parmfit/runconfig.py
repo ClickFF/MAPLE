@@ -67,6 +67,15 @@ def as_tracked(raw: Optional[dict]) -> TrackedParams:
     return raw if isinstance(raw, TrackedParams) else TrackedParams(raw)
 
 
+def read_batch_size(raw: TrackedParams) -> int | None:
+    value = raw.get("batch_size", None)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("batch_size must be a positive integer or empty for automatic batching")
+    return value
+
+
 def _render_path(value: str, run_dir: str) -> str:
     if not os.path.isabs(value):
         return value
@@ -109,6 +118,7 @@ def _unknown_left_hands(tracked: TrackedParams) -> list[str]:
 # legal-value enums, syntax requirements, empty-value semantics, units and
 # 1:1 relations. Everything else renders as a bare key = value line.
 _KEY_NOTES = {
+    "batch_size": "maximum structures per MLIP evaluation; empty = automatic",
     "iqm": "run QM reference geometry and Hessian jobs",
     "qm_engine": "(g16, g09, gaussian, orca)",
     "opt_level": "reference optimization level METHOD/BASIS (write it the way the QM engine expects)",
